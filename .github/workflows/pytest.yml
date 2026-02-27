@@ -1,0 +1,38 @@
+name: Python tests and Auto-Merge
+
+on:
+  push:
+    branches: [ "dev" ]
+  pull_request:
+    branches: [ "dev" ]
+
+jobs:
+  test-and-merge:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # Needed to push back to main
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Fetch all history so push to main works
+      
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        
+      - name: Set up Python
+        run: uv python install 3.10
+        
+      - name: Install dependencies
+        run: uv sync --all-extras --dev
+
+      - name: Run tests
+        run: uv run pytest
+        
+      - name: Merge to main if tests pass
+        if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout main || git checkout -b main
+          git reset --hard dev
+          git push origin main --force
