@@ -54,16 +54,26 @@ def test_date_str_to_ms():
 
 @patch("src.pipelines.hotmart_to_db.fetch_and_save_sales")
 def test_do_initial_sync(mock_fetch):
-    Config.HOTMART_START_DATE = "2024-01-01"
-    Config.HOTMART_END_DATE = "2024-01-31"
+    Config.HOTMART_START_DATE = "2020-01-01"
+    Config.HOTMART_END_DATE = "2022-12-31" # A 3 year span, should create 2 chunks
     
     mock_conn = MagicMock()
     do_initial_sync(mock_conn)
     
-    expected_start = _date_str_to_ms("2024-01-01")
-    expected_end = _date_str_to_ms("2024-01-31")
+    # Needs to be called twice
+    assert mock_fetch.call_count == 2
     
-    mock_fetch.assert_called_once_with(mock_conn, expected_start, expected_end)
+    # First chunk expected
+    expected_start_1 = _date_str_to_ms("2020-01-01")
+    # Leap year so 730 days is 2021-12-31
+    expected_end_1 = _date_str_to_ms("2021-12-31")
+    
+    # Second chunk expected
+    expected_start_2 = _date_str_to_ms("2022-01-01")
+    expected_end_2 = _date_str_to_ms("2022-12-31")
+    
+    mock_fetch.assert_any_call(mock_conn, expected_start_1, expected_end_1)
+    mock_fetch.assert_any_call(mock_conn, expected_start_2, expected_end_2)
 
 @patch("src.pipelines.hotmart_to_db.fetch_and_save_sales")
 def test_do_initial_sync_missing_dates(mock_fetch):

@@ -51,10 +51,7 @@ def fetch_and_save_sales(conn, start_date_ms: str = None, end_date_ms: str = Non
                 txn_id = item.get("purchase", {}).get("transaction") or item.get("transaction")
                 status = item.get("purchase", {}).get("status") or item.get("status", "UNKNOWN")
                 
-                # Filter by specific statuses as requested
-                if status.upper() not in ["APPROVED", "COMPLETE"]:
-                    print(f"Skipping sale {txn_id} due to non-approved status: {status}")
-                    continue
+                # We want ALL statuses (STARTED, CANCELED, WAITING_PAYMENT, etc) for remarketing
                     
                 payment_method = item.get("purchase", {}).get("payment", {}).get("type") or "UNKNOWN"
                 
@@ -112,8 +109,8 @@ def fetch_and_save_sales(conn, start_date_ms: str = None, end_date_ms: str = Non
                 sale = Sale(
                     transaction_id=txn_id,
                     status=status.upper(),
-                    total_price=float(total_price),
-                    net_price=float(net_price),
+                    total_price=float(total_price or 0.0),
+                    net_price=float(net_price or 0.0),
                     payment_method=payment_method,
                     purchased_at=purchased_at,
                     updated_at=updated_at,
@@ -136,6 +133,20 @@ def fetch_and_save_sales(conn, start_date_ms: str = None, end_date_ms: str = Non
     
     print(f"Successfully synced {success_count} total sales into the database over {page_count} pages.")
 
+def get_date_chunks(start_dt: datetime, end_dt: datetime, max_days: int = 730) -> list[tuple[datetime, datetime]]:
+    """Breaks a date range into smaller chunks of up to max_days to avoid API limits."""
+    chunks = []
+    current_start = start_dt
+    while current_start <= end_dt:
+        current_end = current_start + timedelta(days=max_days)
+        if current_end > end_dt:
+            current_end = end_dt
+            
+        chunks.append((current_start, current_end))
+        current_start = current_end + timedelta(days=1)
+    
+    return chunks
+
 def do_initial_sync(conn):
     """Scenario 1: The database is empty. Requires dates from .env config."""
     print("Scenario: Initial sync -> requiring dates from .env config.")
@@ -143,10 +154,17 @@ def do_initial_sync(conn):
     if not Config.HOTMART_START_DATE or not Config.HOTMART_END_DATE:
         raise ValueError("HOTMART_START_DATE and HOTMART_END_DATE must be provided in .env for the initial sync.")
         
-    start_ms = _date_str_to_ms(Config.HOTMART_START_DATE)
-    end_ms = _date_str_to_ms(Config.HOTMART_END_DATE)
+    start_dt = datetime.strptime(Config.HOTMART_START_DATE, "%Y-%m-%d")
+    end_dt = datetime.strptime(Config.HOTMART_END_DATE, "%Y-%m-%d")
     
-    fetch_and_save_sales(conn, start_ms, end_ms)
+    chunks = get_date_chunks(start_dt, end_dt, max_days=730)
+    
+    for current_start, current_end in chunks:
+        print(f"Syncing chunk from {current_start.strftime('%Y-%m-%d')} to {current_end.strftime('%Y-%m-%d')}")
+        start_ms = str(int(current_start.timestamp() * 1000))
+        end_ms = str(int(current_end.timestamp() * 1000))
+        
+        fetch_and_save_sales(conn, start_ms, end_ms)
 
 def do_incremental_sync(conn, max_date_iso: str):
     """Scenario 2: The database has data. Sync from the last sale date up to yesterday."""
