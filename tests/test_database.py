@@ -16,6 +16,8 @@ def test_database_initialization(memory_db):
     cursor = memory_db.execute("SELECT name FROM sqlite_master WHERE type='table';")
     tables = [row["name"] for row in cursor.fetchall()]
     assert "customers" in tables
+    assert "hotmart_customers" in tables
+    assert "manychat_contacts" in tables
     assert "products" in tables
     assert "sales" in tables
 
@@ -26,7 +28,7 @@ def test_upsert_customer(memory_db):
     memory_db.commit()
     
     # Verify insert
-    row = memory_db.execute("SELECT * FROM customers WHERE id = ?", (cust.id,)).fetchone()
+    row = memory_db.execute("SELECT * FROM hotmart_customers WHERE id = ?", (cust.id,)).fetchone()
     assert row["name"] == "Test User"
     assert row["phone"] == "123"
     assert row["email"] == "test@example.com"
@@ -36,7 +38,7 @@ def test_upsert_customer(memory_db):
     upsert_customer(memory_db, cust)
     memory_db.commit()
     
-    row = memory_db.execute("SELECT * FROM customers WHERE id = ?", (cust.id,)).fetchone()
+    row = memory_db.execute("SELECT * FROM hotmart_customers WHERE id = ?", (cust.id,)).fetchone()
     assert row["name"] == "Updated User"
 
 def test_upsert_sale_with_foreign_keys(memory_db):
