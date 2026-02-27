@@ -31,3 +31,11 @@ class HotmartClient:
             return {}
             
         return response.json()
+
+    def get(self, endpoint: str, **kwargs) -> Dict[str, Any]:
+        """Performs a GET request to the Hotmart API."""
+        return self._request("GET", endpoint, **kwargs)
+
+    def post(self, endpoint: str, **kwargs) -> Dict[str, Any]:
+        """Performs a POST request to the Hotmart API."""
+        return self._request("POST", endpoint, **kwargs)
