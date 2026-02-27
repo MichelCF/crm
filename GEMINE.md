@@ -31,5 +31,6 @@
 > **Nota:** O objetivo deste arquivo é servir como um onboarding para o agente de IA.
 
 ## Regras de Execução para a IA
-- O agente **DEVE executar comandos no terminal** (como scripts, git, verificações) sempre que necessário para ler os logs automaticamente e não depender de copiar/colar.
+- O agente **DEVE executar comandos no terminal** (como scripts, verificações ou comandos de git locais) sempre que necessário para ler os logs automaticamente e não depender de copiar/colar.
+- **NUNCA execute `git push`**: O agente é expressamente proibido de rodar comandos de push para o repositório remoto. O *push* deve ser sempre feito manualmente pelo usuário.
 - **Atenção ao `uv` e binários locais:** Como o ambiente do agente pode não carregar o `$PATH` do usuário (`~/.cargo/bin` ou `~/.local/bin`), ao rodar o `uv`, deve-se usar o caminho absoluto (ex: `~/.cargo/bin/uv`) ou carregar o path na mesma linha antes do comando.
