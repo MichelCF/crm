@@ -15,3 +15,7 @@ wheels/
 # Databases
 *.sqlite
 *.db
+
+# Data exports & Local Databases
+data/
+*.csv

@@ -17,7 +17,7 @@ def init_db(conn: sqlite3.Connection):
     cur = conn.cursor()
     
     cur.execute('''
-        CREATE TABLE IF NOT EXISTS customers (
+        CREATE TABLE IF NOT EXISTS hotmart_customers (
             id TEXT PRIMARY KEY,
             email TEXT NOT NULL UNIQUE,
             name TEXT NOT NULL,
@@ -25,6 +25,39 @@ def init_db(conn: sqlite3.Connection):
             document TEXT,
             created_at TIMESTAMP NOT NULL,
             updated_at TIMESTAMP
+        )
+    ''')
+
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS manychat_contacts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nome TEXT,
+            email TEXT,
+            instagram TEXT,
+            whatsapp TEXT,
+            data_remarketing TEXT,
+            agendamento TEXT,
+            data_agendamento TEXT,
+            contactar TEXT,
+            data_contactar TEXT,
+            ultima_interacao TEXT,
+            data_registro TEXT,
+            imported_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS customers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            master_email TEXT UNIQUE,
+            master_phone TEXT UNIQUE,
+            name TEXT,
+            instagram TEXT,
+            document TEXT,
+            hotmart_id TEXT UNIQUE,
+            manychat_id INTEGER UNIQUE,
+            FOREIGN KEY (hotmart_id) REFERENCES hotmart_customers (id),
+            FOREIGN KEY (manychat_id) REFERENCES manychat_contacts (id)
         )
     ''')
     
@@ -47,8 +80,46 @@ def init_db(conn: sqlite3.Connection):
             updated_at TIMESTAMP,
             customer_id TEXT NOT NULL,
             product_id INTEGER NOT NULL,
-            FOREIGN KEY (customer_id) REFERENCES customers (id),
+            FOREIGN KEY (customer_id) REFERENCES hotmart_customers (id),
             FOREIGN KEY (product_id) REFERENCES products (id)
+        )
+    ''')
+
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS hotmart_sales_products (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sale_transaction_id TEXT NOT NULL,
+            product_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            quantity INTEGER NOT NULL,
+            price REAL NOT NULL,
+            commission REAL NOT NULL,
+            FOREIGN KEY (sale_transaction_id) REFERENCES sales (transaction_id),
+            FOREIGN KEY (product_id) REFERENCES products (id)
+        )
+    ''')
+
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS hotmart_sales_commissions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sale_transaction_id TEXT NOT NULL,
+            source TEXT NOT NULL,
+            status TEXT NOT NULL,
+            value REAL NOT NULL,
+            currency TEXT NOT NULL,
+            processed_at TIMESTAMP,
+            FOREIGN KEY (sale_transaction_id) REFERENCES sales (transaction_id)
+        )
+    ''')
+
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS hotmart_sales_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sale_transaction_id TEXT NOT NULL,
+            status TEXT NOT NULL,
+            reason TEXT,
+            changed_at TIMESTAMP NOT NULL,
+            FOREIGN KEY (sale_transaction_id) REFERENCES sales (transaction_id)
         )
     ''')
     
@@ -57,7 +128,7 @@ def init_db(conn: sqlite3.Connection):
 def upsert_customer(conn: sqlite3.Connection, customer: Customer):
     """Inserts or updates a customer record using id as PK."""
     conn.execute('''
-        INSERT INTO customers (id, email, name, phone, document, created_at, updated_at)
+        INSERT INTO hotmart_customers (id, email, name, phone, document, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             email=excluded.email,
