@@ -61,7 +61,7 @@ def test_import_manychat_csv_skips_empty_contacts(
     mock_consolidate, mock_csv_reader, mock_open, mock_get_conn
 ):
     """
-    Happy Path / Decision Test: Rows without both email AND whatsapp are stored 
+    Happy Path / Decision Test: Rows without both email AND whatsapp are stored
     in raw tables. Business rules for Master are handled in consolidation.
     """
 
