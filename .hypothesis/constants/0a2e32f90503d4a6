@@ -1,0 +1,4 @@
+# file: /home/caiafa/projetos/michel/crm/src/logic/reporting.py
+# hypothesis_version: 6.151.9
+
+[0.0, '%Y-%m-%d', '+', ', ', '-', '=', '?', 'APPROVED', 'BILLET_PRINTED', 'CANCELED', 'CHARGEBACK', 'COMPLETE', 'Compradores Unicos', 'PARTIALLY_REFUNDED', 'Qtd Cancelamentos', 'R$ {:,.2f}', 'REFUNDED', 'Valor Cancelado', 'Valor Total (Vendas)', 'WAITING_PAYMENT', 'a', 'buyers', 'cancelled_count', 'cancelled_value', 'data', 'reports', 'utf-8', 'value', '{:,.0f}']

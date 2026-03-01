@@ -58,8 +58,12 @@ def get_stats_for_load(
 
 def generate_delta_report(conn: sqlite3.Connection):
     """
-    Prints a report comparing the current (latest) load with the penultimate one.
+    Prints a report comparing the current (latest) load with the penultimate one
+    and saves it to a .txt file.
     """
+    from datetime import datetime
+    import os
+
     cur = conn.cursor()
 
     # Find distinct import timestamps
@@ -68,56 +72,88 @@ def generate_delta_report(conn: sqlite3.Connection):
     )
     loads = [row[0] for row in cur.fetchall()]
 
-    print("\n" + "=" * 50)
-    print("         RELATÓRIO DE CONSOLIDAÇÃO (METRICS)")
-    print("=" * 50)
+    report_lines = []
+    report_lines.append("\n" + "=" * 50)
+    report_lines.append("         RELATORIO DE CONSOLIDACAO (METRICAS)")
+    report_lines.append("=" * 50)
 
     if len(loads) < 1:
-        print("Nenhum dado encontrado para gerar relatório.")
-        return
+        report_lines.append("Nenhum dado encontrado para gerar relatorio.")
+    else:
+        current_load_time = loads[0]
+        current_stats = get_stats_for_load(conn, current_load_time)
 
-    current_load_time = loads[0]
-    current_stats = get_stats_for_load(conn, current_load_time)
+        if len(loads) == 2:
+            prev_load_time = loads[1]
+            prev_stats = get_stats_for_load(conn, prev_load_time)
 
-    if len(loads) == 2:
-        prev_load_time = loads[1]
-        prev_stats = get_stats_for_load(conn, prev_load_time)
+            report_lines.append(
+                f"Comparativo: Atual ({current_load_time}) vs Anterior ({prev_load_time})"
+            )
+            report_lines.append("-" * 50)
 
-        print(
-            f"Comparativo: Atual ({current_load_time}) vs Anterior ({prev_load_time})"
-        )
-        print("-" * 50)
+            def add_delta(label, curr, prev, is_currency=False):
+                delta = curr - prev
+                fmt = "R$ {:,.2f}" if is_currency else "{:,.0f}"
+                delta_prefix = "+" if delta > 0 else ""
+                report_lines.append(
+                    f"{label:<25} | {fmt.format(curr):>10} | Delta: {delta_prefix}{fmt.format(delta)}"
+                )
 
-        def print_delta(label, curr, prev, is_currency=False):
-            delta = curr - prev
-            fmt = "R$ {:,.2f}" if is_currency else "{:,.0f}"
-            delta_prefix = "+" if delta > 0 else ""
-            print(
-                f"{label:<25} | {fmt.format(curr):>10} | Delta: {delta_prefix}{fmt.format(delta)}"
+            add_delta(
+                "Compradores Unicos", current_stats["buyers"], prev_stats["buyers"]
+            )
+            add_delta(
+                "Valor Total (Vendas)",
+                current_stats["value"],
+                prev_stats["value"],
+                True,
+            )
+            add_delta(
+                "Qtd Cancelamentos",
+                current_stats["cancelled_count"],
+                prev_stats["cancelled_count"],
+            )
+            add_delta(
+                "Valor Cancelado",
+                current_stats["cancelled_value"],
+                prev_stats["cancelled_value"],
+                True,
+            )
+        else:
+            # Initial load or after DB wipe
+            report_lines.append(f"Carga Inicial detectada em: {current_load_time}")
+            report_lines.append("-" * 50)
+            report_lines.append(
+                f"{'Compradores Unicos:':<25} {current_stats['buyers']}"
+            )
+            report_lines.append(
+                f"{'Valor Total (Vendas):':<25} R$ {current_stats['value']:,.2f}"
+            )
+            report_lines.append(
+                f"{'Qtd Cancelamentos:':<25} {current_stats['cancelled_count']}"
+            )
+            report_lines.append(
+                f"{'Valor Cancelado:':<25} R$ {current_stats['cancelled_value']:,.2f}"
             )
 
-        print_delta("Compradores Únicos", current_stats["buyers"], prev_stats["buyers"])
-        print_delta(
-            "Valor Total (Vendas)", current_stats["value"], prev_stats["value"], True
-        )
-        print_delta(
-            "Qtd Cancelamentos",
-            current_stats["cancelled_count"],
-            prev_stats["cancelled_count"],
-        )
-        print_delta(
-            "Valor Cancelado",
-            current_stats["cancelled_value"],
-            prev_stats["cancelled_value"],
-            True,
-        )
-    else:
-        # Initial load or after DB wipe
-        print(f"Carga Inicial detectada em: {current_load_time}")
-        print("-" * 50)
-        print(f"{'Compradores Únicos:':<25} {current_stats['buyers']}")
-        print(f"{'Valor Total (Vendas):':<25} R$ {current_stats['value']:,.2f}")
-        print(f"{'Qtd Cancelamentos:':<25} {current_stats['cancelled_count']}")
-        print(f"{'Valor Cancelado:':<25} R$ {current_stats['cancelled_value']:,.2f}")
+    report_lines.append("=" * 50 + "\n")
 
-    print("=" * 50 + "\n")
+    # Final string
+    full_report = "\n".join(report_lines)
+
+    # Print to console
+    print(full_report)
+
+    # Save to file
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    filename = f"relatorio_geral_{today_str}.txt"
+    report_path = os.path.join("data", "reports", filename)
+
+    try:
+        os.makedirs(os.path.dirname(report_path), exist_ok=True)
+        with open(report_path, "a", encoding="utf-8") as f:
+            f.write(full_report)
+        print(f"Relatorio salvo em: {report_path}")
+    except Exception as e:
+        print(f"Erro ao salvar relatorio em arquivo: {e}")
