@@ -18,7 +18,11 @@ from src.config import Config
 def test_fetch_and_save_sales_pagination(
     mock_upsert_sale, mock_upsert_product, mock_upsert_customer, mock_get_sales
 ):
-    """Verifies that the loop fetches multiple pages when next_page_token is present."""
+    """
+    Happy Path / Boundary Test: Verifies that the pagination loop works correctly.
+    Scenario: The API returns two pages of data.
+    Assertion: The client should make exactly 2 calls and upsert 2 sales.
+    """
     # Setup mock responses for 2 pages
     page_1 = {
         "items": [
@@ -62,9 +66,10 @@ def test_fetch_and_save_sales_pagination(
 
 
 def test_date_str_to_ms():
+    """
+    Unit Test: Verifies correct conversion from YYYY-MM-DD to Milliseconds.
+    """
     date_str = "2024-01-01"
-    # Unix timestamp for 2024-01-01 UTC is approx 1704067200, depending on timezone.
-    # We just need to check if it parses correctly.
     dt = datetime.strptime(date_str, "%Y-%m-%d")
     expected_ms = str(int(dt.timestamp() * 1000))
     assert _date_str_to_ms(date_str) == expected_ms
@@ -72,21 +77,22 @@ def test_date_str_to_ms():
 
 @patch("src.pipelines.hotmart_to_db.fetch_and_save_sales")
 def test_do_initial_sync(mock_fetch):
+    """
+    Decision Test: Verifies that initial sync slices a large date range into chunks.
+    Scenario: 3 year span from .env.
+    Assertion: Should result in 2 calls to fetch_and_save_sales (730 day max per chunk).
+    """
     Config.HOTMART_START_DATE = "2020-01-01"
-    Config.HOTMART_END_DATE = "2022-12-31"  # A 3 year span, should create 2 chunks
+    Config.HOTMART_END_DATE = "2022-12-31"
 
     mock_conn = MagicMock()
     do_initial_sync(mock_conn)
 
-    # Needs to be called twice
     assert mock_fetch.call_count == 2
 
-    # First chunk expected
     expected_start_1 = _date_str_to_ms("2020-01-01")
-    # Leap year so 730 days is 2021-12-31
     expected_end_1 = _date_str_to_ms("2021-12-31")
 
-    # Second chunk expected
     expected_start_2 = _date_str_to_ms("2022-01-01")
     expected_end_2 = _date_str_to_ms("2022-12-31")
 
@@ -96,6 +102,9 @@ def test_do_initial_sync(mock_fetch):
 
 @patch("src.pipelines.hotmart_to_db.fetch_and_save_sales")
 def test_do_initial_sync_missing_dates(mock_fetch):
+    """
+    Negative Test: Sync should fail if environment variables are missing.
+    """
     Config.HOTMART_START_DATE = None
     Config.HOTMART_END_DATE = None
 
@@ -109,7 +118,9 @@ def test_do_initial_sync_missing_dates(mock_fetch):
 @patch("src.pipelines.hotmart_to_db.datetime")
 @patch("src.pipelines.hotmart_to_db.fetch_and_save_sales")
 def test_do_incremental_sync(mock_fetch, mock_datetime):
-    # Mock datetime.now() to a fixed date
+    """
+    Happy Path Test: Incremental sync fetches data from max current date to yesterday.
+    """
     fixed_now = datetime(2024, 2, 10, 12, 0, 0)
     mock_datetime.now.return_value = fixed_now
     mock_datetime.fromisoformat = datetime.fromisoformat
@@ -119,7 +130,6 @@ def test_do_incremental_sync(mock_fetch, mock_datetime):
 
     do_incremental_sync(mock_conn, max_date_iso)
 
-    # Calculate expected
     expected_max_date = datetime.fromisoformat(max_date_iso)
     expected_yesterday = fixed_now - timedelta(days=1)
 
@@ -137,7 +147,11 @@ def test_do_incremental_sync(mock_fetch, mock_datetime):
 def test_sync_sales_to_db_empty(
     mock_get_conn, mock_init, mock_inc, mock_init_sync, mock_get_max
 ):
-    mock_get_max.return_value = None  # DB is empty
+    """
+    Decision Test: Branch to Initial Sync.
+    Scenario: Database is empty (max_sale_date is None).
+    """
+    mock_get_max.return_value = None
     mock_conn = MagicMock()
     mock_get_conn.return_value = mock_conn
 
@@ -156,7 +170,11 @@ def test_sync_sales_to_db_empty(
 def test_sync_sales_to_db_incremental(
     mock_get_conn, mock_init, mock_inc, mock_init_sync, mock_get_max
 ):
-    mock_get_max.return_value = "2024-01-01T10:00:00"  # DB has data
+    """
+    Decision Test: Branch to Incremental Sync.
+    Scenario: Database has data (max_sale_date is present).
+    """
+    mock_get_max.return_value = "2024-01-01T10:00:00"
     mock_conn = MagicMock()
     mock_get_conn.return_value = mock_conn
 

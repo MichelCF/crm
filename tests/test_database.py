@@ -15,16 +15,19 @@ def mock_db():
 
 
 # =====================================================================
-# Objetivo do Teste: Validar inserção no SQLite com campos enriquecidos de Endereço e Pagamento
-# Valores esperados:
-# 1. No Ponto: Cliente e Venda com dados completos de V2 (Bairro, CEP, Pix, etc) inseridos corretamente.
-# 2. Falha: Tentativa de inserir uma Venda sem Customer associado ou com nulos indevidos (violando a FK/constraints).
+# BOUNDARY TESTS & MC/DC
 # =====================================================================
 
 
 def test_full_pipeline_insert_happy_path(mock_db):
-    """Verifica se os novos campos de V2 são de fato gravados no banco nas tabelas certas."""
-    # 1. Insere Cliente Completo
+    """
+    Happy Path Test: Verifies that V2 enriched fields (Address, Payment)
+    are correctly persisted in the SQLite tables.
+
+    This test covers the 'All valid inputs' case for both
+    upsert_customer and upsert_sale.
+    """
+    # 1. Insert Full Customer (V2)
     cust = Customer(
         id="CUST-999",
         name="Sr. Madruga",
@@ -42,11 +45,11 @@ def test_full_pipeline_insert_happy_path(mock_db):
     )
     upsert_customer(mock_db, cust)
 
-    # 2. Insere Produto Básico
+    # 2. Insert Basic Product
     prod = Product(id="PROD-1", name="Curso de Violão")
     upsert_product(mock_db, prod)
 
-    # 3. Insere Venda Completa
+    # 3. Insert Full Sale (V2)
     sale = Sale(
         transaction="TXN-12345",
         status="APPROVED",
@@ -60,17 +63,19 @@ def test_full_pipeline_insert_happy_path(mock_db):
     )
     upsert_sale(mock_db, sale)
 
-    # 4. Verifica na Tabela (Assert)
+    # 4. Verify Persistence (Assertions)
     cur = mock_db.cursor()
     cur.execute(
-        "SELECT neighborhood, zip_code FROM hotmart_customers WHERE id = 'CUST-999'"
+        "SELECT neighborhood, zip_code FROM hotmart_customers WHERE id = ?",
+        ("CUST-999",),
     )
     row_cust = cur.fetchone()
     assert row_cust[0] == "Vila"
     assert row_cust[1] == "12345-678"
 
     cur.execute(
-        "SELECT payment_type, installments FROM sales WHERE transaction_id = 'TXN-12345'"
+        "SELECT payment_type, installments FROM sales WHERE transaction_id = ?",
+        ("TXN-12345",),
     )
     row_sale = cur.fetchone()
     assert row_sale[0] == "PIX"
@@ -78,19 +83,52 @@ def test_full_pipeline_insert_happy_path(mock_db):
 
 
 def test_insert_sale_negative_case(mock_db):
-    """Testa se o SQLite respeita as constraints e impede de cadastrar sem os campos NOT NULL."""
+    """
+    Negative/Boundary Test: Verifies SQLite constraints (NOT NULL).
+
+    MC/DC consideration:
+    In the database schema, 'status' and 'customer_id' are NOT NULL.
+    This test verifies that missing a required field triggers an IntegrityError.
+    """
     prod = Product(id="PROD-1", name="Curso de Violão")
     upsert_product(mock_db, prod)
 
-    # Tentando forçar objeto pydantic ou mock vazio que passa no Python mas quebra as premissas do SQL (Falta o status obrigatório no BD)
+    # Attempting to insert a sale with a NULL status (which is NOT NULL in DB)
     sale_invalid = Sale(
         transaction="TXN-INVALID",
-        status=None,  # BD exige NOT NULL de acordo com schemas originais
+        status=None,  # triggers IntegrityError on INSERT
         total_price=99.90,
         currency="BRL",
-        customer_id="CUST-GHOST",  # Customer não existe
+        customer_id="CUST-GHOST",
         product_id=prod.id,
     )
 
     with pytest.raises(sqlite3.IntegrityError):
         upsert_sale(mock_db, sale_invalid)
+
+
+def test_upsert_customer_boundary_update(mock_db):
+    """
+    Boundary Test: Verifies that upserting an existing customer correctly updates
+    their information instead of creating a duplicate.
+    """
+    # 1. Initial Insert
+    cust1 = Customer(id="B-1", email="a@b.com", name="A", created_at=datetime.now())
+    upsert_customer(mock_db, cust1)
+
+    # 2. Update via Upsert (Same ID, different data)
+    cust2 = Customer(
+        id="B-1", email="new@b.com", name="New Name", created_at=datetime.now()
+    )
+    upsert_customer(mock_db, cust2)
+
+    cur = mock_db.cursor()
+    cur.execute("SELECT email, name FROM hotmart_customers WHERE id = 'B-1'")
+    row = cur.fetchone()
+
+    assert row[0] == "new@b.com"
+    assert row[1] == "New Name"
+
+    # Ensure there is still only 1 customer
+    cur.execute("SELECT count(*) FROM hotmart_customers")
+    assert cur.fetchone()[0] == 1

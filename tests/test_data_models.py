@@ -35,7 +35,7 @@ def test_sale_model_valid():
         payment_method="CREDIT_CARD",
         customer_id="USER123",
         product_id="1",
-        currency="BRL"
+        currency="BRL",
     )
     assert sale.currency == "BRL"
     assert sale.transaction == "TX123"

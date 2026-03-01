@@ -14,17 +14,35 @@ def mock_env():
     del os.environ["HOTMART_CLIENT_SECRET"]
 
 
-def test_sales_history_enforces_contract(mock_env):
+def test_sales_history_enforces_contract_mcdc(mock_env):
     """
-    Ensures that empty requests or requests missing required date params
-    fail immediately without hitting the network.
+    MC/DC Test: Validates API contract enforcement for get_sales_history.
+    Decision: get_sales_history requires BOTH start_date (A) and end_date (B).
+    Truth Table:
+    A (start) | B (end) | Output
+    ----------------------------
+    False     | False   | Raises ValidationError (Missing both)
+    True      | False   | Raises ValidationError (Missing end_date)
+    False     | True    | Raises ValidationError (Missing start_date)
+    True      | True    | Success (Implicit in `test_sales_history_success_contract`)
     """
+    # Case 1: Both missing (False, False)
     with pytest.raises(ValidationError) as exc_info:
-        get_sales_history()  # Missing start_date and end_date
+        get_sales_history()
 
-    # Check that both fields are missing
     assert "start_date" in str(exc_info.value)
+
+    # Case 2: start_date present, end_date missing (True, False)
+    with pytest.raises(ValidationError) as exc_info:
+        get_sales_history(start_date="1672531200000")
+
     assert "end_date" in str(exc_info.value)
+
+    # Case 3: start_date missing, end_date present (False, True)
+    with pytest.raises(ValidationError) as exc_info:
+        get_sales_history(end_date="1704067199000")
+
+    assert "start_date" in str(exc_info.value)
 
 
 @responses.activate
