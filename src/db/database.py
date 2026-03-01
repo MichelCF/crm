@@ -70,9 +70,7 @@ def init_db(conn: sqlite3.Connection):
             source TEXT DEFAULT 'HOTMART',
             has_purchased BOOLEAN DEFAULT 0,
             segment TEXT,
-            updated_at TIMESTAMP,
-            FOREIGN KEY (hotmart_id) REFERENCES hotmart_customers (id),
-            FOREIGN KEY (manychat_id) REFERENCES manychat_contacts (id)
+            updated_at TIMESTAMP
         )
     """)
 
@@ -121,39 +119,35 @@ def init_db(conn: sqlite3.Connection):
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS hotmart_sales_products (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            row_id INTEGER PRIMARY KEY AUTOINCREMENT,
             sale_transaction_id TEXT NOT NULL,
-            product_id INTEGER NOT NULL,
+            product_id TEXT NOT NULL,
             name TEXT NOT NULL,
             quantity INTEGER NOT NULL,
             price REAL NOT NULL,
-            commission REAL NOT NULL,
-            FOREIGN KEY (sale_transaction_id) REFERENCES sales (transaction_id),
-            FOREIGN KEY (product_id) REFERENCES products (id)
+            commission REAL NOT NULL
         )
     """)
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS hotmart_sales_commissions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            row_id INTEGER PRIMARY KEY AUTOINCREMENT,
             sale_transaction_id TEXT NOT NULL,
             source TEXT NOT NULL,
             status TEXT NOT NULL,
             value REAL NOT NULL,
             currency TEXT NOT NULL,
-            processed_at TIMESTAMP,
-            FOREIGN KEY (sale_transaction_id) REFERENCES sales (transaction_id)
+            processed_at TIMESTAMP
         )
     """)
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS hotmart_sales_history (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            row_id INTEGER PRIMARY KEY AUTOINCREMENT,
             sale_transaction_id TEXT NOT NULL,
             status TEXT NOT NULL,
             reason TEXT,
-            changed_at TIMESTAMP NOT NULL,
-            FOREIGN KEY (sale_transaction_id) REFERENCES sales (transaction_id)
+            changed_at TIMESTAMP NOT NULL
         )
     """)
 
