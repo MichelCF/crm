@@ -25,7 +25,7 @@ from src.config import Config
 def run_daily_job():
     """
     Orchestrates the daily pipeline execution:
-    1. Sync Hotmart sales (incremental)
+    1. Sync Hotmart sales
     2. Process all ManyChat CSVs in the input directory
     """
     print(f"[{datetime.now().isoformat()}] Starting daily scheduled job...")
@@ -80,6 +80,13 @@ def main():
 
 
 if __name__ == "__main__":
+    delay = Config.get_startup_delay()
+    if delay > 0:
+        print(
+            f"Aguardando {delay} segundos para iniciar (Ambiente: {Config.ENVIRONMENT.upper()})..."
+        )
+        time.sleep(delay)
+
     # If passed '--now' arg, run immediately
     if len(sys.argv) > 1 and sys.argv[1] == "--now":
         run_daily_job()

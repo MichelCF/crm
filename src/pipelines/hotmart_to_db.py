@@ -310,6 +310,7 @@ def do_incremental_sync(
 def sync_sales_to_db():
     """
     Main orchestrator that determines the scenario and triggers the correct flow.
+    Uses Config to determine the date range based on the environment.
     """
     print("Starting Hotmart sync pipeline...")
 

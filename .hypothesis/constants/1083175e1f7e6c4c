@@ -1,0 +1,4 @@
+# file: /home/caiafa/projetos/michel/crm/src/config.py
+# hypothesis_version: 6.151.9
+
+[999, '%H:%M:%S', '%Y-%m-%d', '00:00:00', 'ENVIRONMENT', 'HOTMART_END_DATE', 'HOTMART_START_DATE', 'MANYCHAT_CSV_OUTPUT', 'SCHEDULE_TIME', 'data/input/manychat', 'data/output/publico', 'data/reports', 'dev', 'hml', 'manychat_output.csv', 'prd']

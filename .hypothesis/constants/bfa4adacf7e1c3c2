@@ -1,0 +1,4 @@
+# file: /home/caiafa/projetos/michel/crm/src/pipelines/hotmart_to_db.py
+# hypothesis_version: 6.151.9
+
+[0.0, 1000.0, 730, 999, 1000, '%Y-%m-%d', '%Y-%m-%d %H:%M:%S', '0', 'BRL', 'BUYER', 'BUYer', 'UNKNOWN', 'Unknown Buyer', 'Unknown Product', '__main__', 'address', 'approved_date', 'buyer', 'city', 'country', 'currency', 'document', 'email', 'end_date', 'id', 'installments_number', 'items', 'name', 'neighborhood', 'next_page_token', 'number', 'order_date', 'page_info', 'page_token', 'payment', 'phone', 'price', 'product', 'purchase', 'role', 'start_date', 'state', 'status', 'transaction', 'type', 'ucode', 'user', 'users', 'value', 'zip_code']
