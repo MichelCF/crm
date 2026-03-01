@@ -8,6 +8,7 @@ from src.db.database import (
     upsert_product,
     upsert_sale,
     get_max_sale_date,
+    consolidate_all_to_master,
 )
 from src.config import Config
 
@@ -280,6 +281,7 @@ def sync_sales_to_db():
     else:
         do_incremental_sync(conn, max_date_iso)
 
+    consolidate_all_to_master(conn)
     conn.close()
     print("Finished pipeline.")
 

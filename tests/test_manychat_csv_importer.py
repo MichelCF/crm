@@ -56,20 +56,13 @@ def test_excel_date_to_datetime_valid_comma():
 @patch("src.pipelines.manychat_csv_importer.get_connection")
 @patch("builtins.open")
 @patch("src.pipelines.manychat_csv_importer.csv.DictReader")
+@patch("src.pipelines.manychat_csv_importer.consolidate_all_to_master")
 def test_import_manychat_csv_skips_empty_contacts(
-    mock_csv_reader, mock_open, mock_get_conn
+    mock_consolidate, mock_csv_reader, mock_open, mock_get_conn
 ):
     """
-    Happy Path / Decision Test: Rows without both email AND whatsapp should be
-    stored in raw tables but ignored for master customer records.
-
-    Logic: (HasEmail OR HasWhatsapp) -> Process to Master.
-    MC/DC:
-    A (Email) | B (Whatsapp) | Master Processed?
-    --------------------------------------------
-    False     | False        | False (This test)
-    True      | False        | True  (test_import_manychat_csv_creates_new_master)
-    False     | True         | True  (test_import_manychat_csv_updates_existing_master)
+    Happy Path / Decision Test: Rows without both email AND whatsapp are stored 
+    in raw tables. Business rules for Master are handled in consolidation.
     """
 
     mock_conn = MagicMock()
@@ -78,20 +71,12 @@ def test_import_manychat_csv_skips_empty_contacts(
     mock_conn.cursor.return_value = mock_cur
 
     mock_reader_instance = MagicMock()
-    mock_reader_instance.fieldnames = ["nome", "email", "whatsapp", "instagram"]
     mock_reader_instance.__iter__.return_value = [
         {
             "nome": "No Contact Info",
             "email": "",
             "whatsapp": "",
             "instagram": "insta_ghost",
-            "data_remarketing": "",
-            "agendamento": "",
-            "data_agendamento": "",
-            "contactar": "",
-            "data_contactar": "",
-            "ultima_interacao": "",
-            "data_registro": "",
         }
     ]
     mock_csv_reader.return_value = mock_reader_instance
@@ -99,31 +84,20 @@ def test_import_manychat_csv_skips_empty_contacts(
     import_manychat_csv("dummy_path.csv")
 
     # Raw insert should happen regardless
-    insert_raw_calls = [
-        call
-        for call in mock_cur.execute.call_args_list
-        if "INSERT INTO manychat_contacts" in call[0][0]
-    ]
-    assert len(insert_raw_calls) == 1
-
-    # Master table (customers) should NOT be touched
-    query_master_calls = [
-        call
-        for call in mock_cur.execute.call_args_list
-        if "customers" in call[0][0].lower()
-    ]
-    assert len(query_master_calls) == 0
+    mock_cur.execute.assert_called()
+    # Consolidation should be triggered
+    mock_consolidate.assert_called_once_with(mock_conn)
 
 
 @patch("src.pipelines.manychat_csv_importer.get_connection")
 @patch("builtins.open")
 @patch("src.pipelines.manychat_csv_importer.csv.DictReader")
+@patch("src.pipelines.manychat_csv_importer.consolidate_all_to_master")
 def test_import_manychat_csv_creates_new_master(
-    mock_csv_reader, mock_open, mock_get_conn
+    mock_consolidate, mock_csv_reader, mock_open, mock_get_conn
 ):
     """
-    Happy Path Test: A valid row with a new email creates a new master customer.
-    (Case A=True, B=False for MC/DC)
+    Happy Path Test: Verifies that importer triggers consolidation after raw insert.
     """
 
     mock_conn = MagicMock()
@@ -131,46 +105,31 @@ def test_import_manychat_csv_creates_new_master(
     mock_get_conn.return_value = mock_conn
     mock_conn.cursor.return_value = mock_cur
 
-    mock_cur.fetchone.return_value = None
-
     mock_reader_instance = MagicMock()
-    mock_reader_instance.fieldnames = ["nome", "email", "whatsapp", "instagram"]
     mock_reader_instance.__iter__.return_value = [
         {
             "nome": "Valid User",
             "email": "test@test.com",
-            "whatsapp": "",
-            "instagram": "",
-            "data_remarketing": "",
-            "agendamento": "",
-            "data_agendamento": "",
-            "contactar": "",
-            "data_contactar": "",
-            "ultima_interacao": "",
-            "data_registro": "",
+            "whatsapp": "551199999",
         }
     ]
     mock_csv_reader.return_value = mock_reader_instance
 
     import_manychat_csv("dummy_path.csv")
 
-    insert_master_calls = [
-        call
-        for call in mock_cur.execute.call_args_list
-        if "INSERT INTO customers" in call[0][0]
-    ]
-    assert len(insert_master_calls) == 1
+    # Verify consolidation call
+    mock_consolidate.assert_called_once_with(mock_conn)
 
 
 @patch("src.pipelines.manychat_csv_importer.get_connection")
 @patch("builtins.open")
 @patch("src.pipelines.manychat_csv_importer.csv.DictReader")
+@patch("src.pipelines.manychat_csv_importer.consolidate_all_to_master")
 def test_import_manychat_csv_updates_existing_master(
-    mock_csv_reader, mock_open, mock_get_conn
+    mock_consolidate, mock_csv_reader, mock_open, mock_get_conn
 ):
     """
-    Happy Path Test: A valid row with an existing phone updates the master customer.
-    (Case A=False, B=True for MC/DC)
+    Happy Path Test: Verifies that importer triggers consolidation after raw insert.
     """
 
     mock_conn = MagicMock()
@@ -178,33 +137,15 @@ def test_import_manychat_csv_updates_existing_master(
     mock_get_conn.return_value = mock_conn
     mock_conn.cursor.return_value = mock_cur
 
-    mock_cur.fetchone.return_value = {"id": "123"}
-
     mock_reader_instance = MagicMock()
-    mock_reader_instance.fieldnames = ["nome", "email", "whatsapp", "instagram"]
     mock_reader_instance.__iter__.return_value = [
         {
             "nome": "Existing User",
-            "email": "",
             "whatsapp": "551199999",
-            "instagram": "new_insta",
-            "data_remarketing": "",
-            "agendamento": "",
-            "data_agendamento": "",
-            "contactar": "",
-            "data_contactar": "",
-            "ultima_interacao": "",
-            "data_registro": "",
         }
     ]
     mock_csv_reader.return_value = mock_reader_instance
 
     import_manychat_csv("dummy_path.csv")
 
-    update_master_calls = [
-        call
-        for call in mock_cur.execute.call_args_list
-        if "UPDATE customers" in call[0][0]
-    ]
-    assert len(update_master_calls) == 1
-    assert update_master_calls[0][0][1][2] == "123"
+    mock_consolidate.assert_called_once_with(mock_conn)

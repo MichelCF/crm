@@ -65,10 +65,32 @@ def init_db(conn: sqlite3.Connection):
             document TEXT,
             hotmart_id TEXT UNIQUE,
             manychat_id INTEGER UNIQUE,
+            source TEXT DEFAULT 'HOTMART',
+            has_purchased BOOLEAN DEFAULT 0,
+            segment TEXT,
+            updated_at TIMESTAMP,
             FOREIGN KEY (hotmart_id) REFERENCES hotmart_customers (id),
             FOREIGN KEY (manychat_id) REFERENCES manychat_contacts (id)
         )
     """)
+
+    # Migrações para colunas novas caso a tabela já exista
+    try:
+        cur.execute("ALTER TABLE customers ADD COLUMN source TEXT DEFAULT 'HOTMART'")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        cur.execute("ALTER TABLE customers ADD COLUMN has_purchased BOOLEAN DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        cur.execute("ALTER TABLE customers ADD COLUMN segment TEXT")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        cur.execute("ALTER TABLE customers ADD COLUMN updated_at TIMESTAMP")
+    except sqlite3.OperationalError:
+        pass
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS products (
@@ -238,3 +260,191 @@ def get_max_sale_date(conn: sqlite3.Connection) -> Optional[str]:
     if row and row["max_date"]:
         return row["max_date"]
     return None
+
+
+def upsert_master_customer(
+    conn: sqlite3.Connection,
+    source: str,
+    email: Optional[str] = None,
+    phone: Optional[str] = None,
+    name: Optional[str] = None,
+    instagram: Optional[str] = None,
+    hotmart_id: Optional[str] = None,
+    manychat_id: Optional[int] = None,
+    has_purchased: bool = False,
+    segment: Optional[str] = None,
+):
+    """
+    Consolidates data into the 'customers' table following business rules:
+    - Hotmart is the Source of Truth.
+    - ManyChat data only flows to Master if phone is present.
+    - If user exists as HOTMART, ManyChat only updates missing fields (like Instagram).
+    """
+    cur = conn.cursor()
+    from datetime import datetime
+
+    now = datetime.now().isoformat()
+
+    # 1. Tentar localizar usuário existente
+    existing = None
+    if email:
+        cur.execute(
+            "SELECT * FROM customers WHERE master_email = ?", (email.lower().strip(),)
+        )
+        existing = cur.fetchone()
+
+    if not existing and phone:
+        cur.execute("SELECT * FROM customers WHERE master_phone = ?", (phone.strip(),))
+        existing = cur.fetchone()
+
+    if not existing and hotmart_id:
+        cur.execute("SELECT * FROM customers WHERE hotmart_id = ?", (hotmart_id,))
+        existing = cur.fetchone()
+
+    # 2. Lógica de Upsert
+    if existing:
+        user_id = existing["id"]
+        current_source = existing["source"]
+
+        if source == "HOTMART":
+            # Hotmart sobrescreve quase tudo
+            cur.execute(
+                """
+                UPDATE customers SET
+                    master_email = COALESCE(?, master_email),
+                    master_phone = COALESCE(?, master_phone),
+                    name = COALESCE(?, name),
+                    hotmart_id = COALESCE(?, hotmart_id),
+                    source = 'HOTMART',
+                    has_purchased = ?,
+                    segment = ?,
+                    updated_at = ?
+                WHERE id = ?
+            """,
+                (
+                    email,
+                    phone,
+                    name,
+                    hotmart_id,
+                    1 if has_purchased else existing["has_purchased"],
+                    segment or existing["segment"],
+                    now,
+                    user_id,
+                ),
+            )
+        else:
+            # ManyChat só atualiza se a fonte atual não for Hotmart, ou preenche Instagram
+            if current_source == "MANYCHAT":
+                cur.execute(
+                    """
+                    UPDATE customers SET
+                        master_email = COALESCE(master_email, ?),
+                        master_phone = COALESCE(master_phone, ?),
+                        name = COALESCE(name, ?),
+                        instagram = COALESCE(instagram, ?),
+                        manychat_id = COALESCE(manychat_id, ?),
+                        updated_at = ?
+                    WHERE id = ?
+                """,
+                    (email, phone, name, instagram, manychat_id, now, user_id),
+                )
+            else:
+                # Fonte é HOTMART, só permitimos atualizar Instagram e ManyChat ID
+                cur.execute(
+                    """
+                    UPDATE customers SET
+                        instagram = COALESCE(instagram, ?),
+                        manychat_id = COALESCE(manychat_id, ?),
+                        updated_at = ?
+                    WHERE id = ?
+                """,
+                    (instagram, manychat_id, now, user_id),
+                )
+    else:
+        # 3. Criar novo Registro (Follow ManyChat Phone-only rule)
+        if source == "MANYCHAT" and not phone:
+            return  # Ignora ManyChat sem telefone no Master
+
+        cur.execute(
+            """
+            INSERT INTO customers (
+                master_email, master_phone, name, instagram, hotmart_id, 
+                manychat_id, source, has_purchased, segment, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+            (
+                email,
+                phone,
+                name,
+                instagram,
+                hotmart_id,
+                manychat_id,
+                source,
+                1 if has_purchased else 0,
+                segment,
+                now,
+            ),
+        )
+
+
+def consolidate_all_to_master(conn: sqlite3.Connection):
+    """
+    Complete consolidation:
+    1. Rebuild Master from Hotmart (Source of Truth).
+    2. Supplement with ManyChat (Only if has Phone).
+    """
+    from src.logic.user_logic import get_segment_for_products
+
+    cur = conn.cursor()
+
+    # 1. Processar Hotmart (Prioridade)
+    # Pegamos o perfil mais recente e agregamos status de compra e segmentos
+    # Nota: Usamos COALESCE e MAX para determinar se comprou algo aprovado
+    cur.execute("""
+        SELECT 
+            c.id as hotmart_id,
+            c.email,
+            c.name,
+            c.phone,
+            c.document,
+            GROUP_CONCAT(DISTINCT s.product_id) as product_ids,
+            MAX(CASE WHEN s.status IN ('APPROVED', 'COMPLETE') THEN 1 ELSE 0 END) as bought
+        FROM hotmart_customers c
+        LEFT JOIN sales s ON c.id = s.customer_id
+        GROUP BY c.id
+    """)
+    hotmart_users = cur.fetchall()
+
+    for row in hotmart_users:
+        p_ids = row["product_ids"].split(",") if row["product_ids"] else []
+        segment = get_segment_for_products(p_ids)
+
+        upsert_master_customer(
+            conn,
+            source="HOTMART",
+            email=row["email"],
+            phone=row["phone"],
+            name=row["name"],
+            hotmart_id=row["hotmart_id"],
+            has_purchased=bool(row["bought"]),
+            segment=segment,
+        )
+
+    # 2. Processar ManyChat (Suplemento)
+    cur.execute(
+        "SELECT * FROM manychat_contacts WHERE whatsapp IS NOT NULL AND whatsapp != ''"
+    )
+    manychat_users = cur.fetchall()
+
+    for row in manychat_users:
+        upsert_master_customer(
+            conn,
+            source="MANYCHAT",
+            email=row["email"],
+            phone=row["whatsapp"],
+            name=row["nome"],
+            instagram=row["instagram"],
+            manychat_id=row["id"],
+        )
+
+    conn.commit()
