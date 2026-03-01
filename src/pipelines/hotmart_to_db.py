@@ -12,6 +12,7 @@ from src.db.database import (
     get_max_sale_date,
     consolidate_all_to_master,
 )
+from src.logic.reporting import generate_delta_report
 from src.config import Config
 
 
@@ -25,8 +26,10 @@ def fetch_and_save_sales(
     conn,
     start_date_ms: str = None,
     end_date_ms: str = None,
+    page_token: str = None,
     client: Optional[HotmartClient] = None,
-):
+    imported_at: str = None,
+) -> int:
     """Core function to fetch sales over a specific time period and save them to SQLite."""
     if client is None:
         client = HotmartClient()
@@ -35,6 +38,8 @@ def fetch_and_save_sales(
         params["start_date"] = start_date_ms
     if end_date_ms:
         params["end_date"] = end_date_ms
+    if page_token:
+        params["page_token"] = page_token
 
     print(f"Fetching sales history with base params: {params}")
     success_count = 0
@@ -203,7 +208,7 @@ def fetch_and_save_sales(
                 # 3. Save to database
                 upsert_customer(conn, customer)
                 upsert_product(conn, product)
-                upsert_sale(conn, sale)
+                upsert_sale(conn, sale, imported_at=imported_at)
 
                 success_count += 1
 
@@ -216,6 +221,7 @@ def fetch_and_save_sales(
     print(
         f"Successfully synced {success_count} total sales into the database over {page_count} pages."
     )
+    return success_count
 
 
 def get_date_chunks(
@@ -235,7 +241,7 @@ def get_date_chunks(
     return chunks
 
 
-def do_initial_sync(conn):
+def do_initial_sync(conn, client: HotmartClient = None, imported_at: str = None):
     """Scenario 1: The database is empty. Requires dates from .env config."""
     print("Scenario: Initial sync -> requiring dates from .env config.")
 
@@ -253,7 +259,7 @@ def do_initial_sync(conn):
         start_dt = datetime.strptime(Config.HOTMART_START_DATE, "%Y-%m-%d")
         end_dt = datetime.strptime(Config.HOTMART_END_DATE, "%Y-%m-%d")
 
-    client = HotmartClient()
+    client = client or HotmartClient()
     chunks = get_date_chunks(start_dt, end_dt, max_days=730)
 
     for current_start, current_end in chunks:
@@ -263,10 +269,14 @@ def do_initial_sync(conn):
         start_ms = str(int(current_start.timestamp() * 1000))
         end_ms = str(int(current_end.timestamp() * 1000))
 
-        fetch_and_save_sales(conn, start_ms, end_ms, client=client)
+        fetch_and_save_sales(
+            conn, start_ms, end_ms, client=client, imported_at=imported_at
+        )
 
 
-def do_incremental_sync(conn, max_date_iso: str):
+def do_incremental_sync(
+    conn, max_date_iso: str, client: HotmartClient = None, imported_at: str = None
+):
     """Scenario 2: The database has data. Sync from the last sale date up to yesterday."""
     yesterday = datetime.now() - timedelta(days=1)
 
@@ -282,8 +292,8 @@ def do_incremental_sync(conn, max_date_iso: str):
     start_ms = str(int(max_date.timestamp() * 1000))
     end_ms = str(int(end_date.timestamp() * 1000))
 
-    client = HotmartClient()
-    fetch_and_save_sales(conn, start_ms, end_ms, client=client)
+    client = client or HotmartClient()
+    fetch_and_save_sales(conn, start_ms, end_ms, client=client, imported_at=imported_at)
 
 
 def sync_sales_to_db():
@@ -297,15 +307,23 @@ def sync_sales_to_db():
     init_db(conn)
     print("Database initialized.")
 
-    max_date_iso = get_max_sale_date(conn)
-    if not max_date_iso:
-        do_initial_sync(conn)
+    # Generate a unique timestamp for this run (for reporting deltas)
+    run_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    max_date = get_max_sale_date(conn)
+
+    if not max_date:
+        do_initial_sync(conn, imported_at=run_timestamp)
     else:
-        do_incremental_sync(conn, max_date_iso)
+        do_incremental_sync(conn, max_date, imported_at=run_timestamp)
 
     consolidate_all_to_master(conn)
+
+    print("\nGenerating status report...")
+    generate_delta_report(conn)
+
     conn.close()
-    print("Finished pipeline.")
+    print("Hotmart sync completed.")
 
 
 if __name__ == "__main__":

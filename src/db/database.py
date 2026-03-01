@@ -91,6 +91,12 @@ def init_db(conn: sqlite3.Connection):
         cur.execute("ALTER TABLE customers ADD COLUMN updated_at TIMESTAMP")
     except sqlite3.OperationalError:
         pass
+    try:
+        cur.execute(
+            "ALTER TABLE sales ADD COLUMN imported_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
+        )
+    except sqlite3.OperationalError:
+        pass
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS products (
@@ -113,7 +119,8 @@ def init_db(conn: sqlite3.Connection):
             purchased_at TIMESTAMP,
             updated_at TIMESTAMP,
             customer_id TEXT NOT NULL,
-            product_id TEXT NOT NULL
+            product_id TEXT NOT NULL,
+            imported_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
 
@@ -197,16 +204,18 @@ def upsert_product(conn: sqlite3.Connection, product: Product):
     )
 
 
-def upsert_sale(conn: sqlite3.Connection, sale: Sale):
+def upsert_sale(
+    conn: sqlite3.Connection, sale: Sale, imported_at: Optional[str] = None
+):
     """Inserts a sale record as a Raw log (Append)."""
     conn.execute(
         """
         INSERT INTO sales (
             transaction_id, status, total_price, currency, payment_method,
             payment_type, installments, approved_date, order_date,
-            customer_id, product_id
+            customer_id, product_id, imported_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP))
     """,
         (
             sale.transaction,
@@ -220,6 +229,7 @@ def upsert_sale(conn: sqlite3.Connection, sale: Sale):
             sale.order_date,
             sale.customer_id,
             sale.product_id,
+            imported_at,
         ),
     )
 

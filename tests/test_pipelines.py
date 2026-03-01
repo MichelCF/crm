@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, ANY
 from datetime import datetime, timedelta
 from src.pipelines.hotmart_to_db import (
     _date_str_to_ms,
@@ -118,10 +118,18 @@ def test_do_initial_sync(mock_fetch, mock_client, mock_is_dev):
     expected_end_2 = _date_str_to_ms("2022-12-31")
 
     mock_fetch.assert_any_call(
-        mock_conn, expected_start_1, expected_end_1, client=mock_client()
+        mock_conn,
+        expected_start_1,
+        expected_end_1,
+        client=mock_client(),
+        imported_at=ANY,
     )
     mock_fetch.assert_any_call(
-        mock_conn, expected_start_2, expected_end_2, client=mock_client()
+        mock_conn,
+        expected_start_2,
+        expected_end_2,
+        client=mock_client(),
+        imported_at=ANY,
     )
 
 
@@ -165,17 +173,22 @@ def test_do_incremental_sync(mock_fetch, mock_datetime, mock_client, mock_is_dev
     expected_end = str(int(expected_yesterday.timestamp() * 1000))
 
     mock_fetch.assert_called_once_with(
-        mock_conn, expected_start, expected_end, client=mock_client()
+        mock_conn,
+        expected_start,
+        expected_end,
+        client=mock_client(),
+        imported_at=ANY,
     )
 
 
+@patch("src.pipelines.hotmart_to_db.generate_delta_report")
 @patch("src.pipelines.hotmart_to_db.get_max_sale_date")
 @patch("src.pipelines.hotmart_to_db.do_initial_sync")
 @patch("src.pipelines.hotmart_to_db.do_incremental_sync")
 @patch("src.pipelines.hotmart_to_db.init_db")
 @patch("src.pipelines.hotmart_to_db.get_connection")
 def test_sync_sales_to_db_empty(
-    mock_get_conn, mock_init, mock_inc, mock_init_sync, mock_get_max
+    mock_get_conn, mock_init, mock_inc, mock_init_sync, mock_get_max, mock_report
 ):
     """
     Decision Test: Branch to Initial Sync.
@@ -187,18 +200,20 @@ def test_sync_sales_to_db_empty(
 
     sync_sales_to_db()
 
-    mock_init_sync.assert_called_once_with(mock_conn)
+    # We use ANY for imported_at because it's generated inside sync_sales_to_db
+    mock_init_sync.assert_called_once_with(mock_conn, imported_at=ANY)
     mock_inc.assert_not_called()
     mock_conn.close.assert_called_once()
 
 
+@patch("src.pipelines.hotmart_to_db.generate_delta_report")
 @patch("src.pipelines.hotmart_to_db.get_max_sale_date")
 @patch("src.pipelines.hotmart_to_db.do_initial_sync")
 @patch("src.pipelines.hotmart_to_db.do_incremental_sync")
 @patch("src.pipelines.hotmart_to_db.init_db")
 @patch("src.pipelines.hotmart_to_db.get_connection")
 def test_sync_sales_to_db_incremental(
-    mock_get_conn, mock_init, mock_inc, mock_init_sync, mock_get_max
+    mock_get_conn, mock_init, mock_inc, mock_init_sync, mock_get_max, mock_report
 ):
     """
     Decision Test: Branch to Incremental Sync.
@@ -210,6 +225,6 @@ def test_sync_sales_to_db_incremental(
 
     sync_sales_to_db()
 
-    mock_inc.assert_called_once_with(mock_conn, "2024-01-01T10:00:00")
+    mock_inc.assert_called_once_with(mock_conn, "2024-01-01T10:00:00", imported_at=ANY)
     mock_init_sync.assert_not_called()
     mock_conn.close.assert_called_once()
