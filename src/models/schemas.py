@@ -36,6 +36,7 @@ class Sale(BaseModel):
     order_date: int | None = None
     total_price: float | None = None
     currency: str | None = None
+    purchased_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
     # Foreign Keys (Logical representation)

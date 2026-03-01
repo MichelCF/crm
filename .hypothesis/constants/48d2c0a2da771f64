@@ -1,0 +1,4 @@
+# file: /home/caiafa/projetos/michel/crm/src/db/database.py
+# hypothesis_version: 6.151.9
+
+['%Y-%m-%d %H:%M:%S', ',', 'HOTMART', 'MANYCHAT', 'audience_estetica', 'audience_ilpi', 'bought', 'email', 'has_purchased', 'hotmart_id', 'id', 'imported_at', 'instagram', 'max_date', 'name', 'nome', 'phone', 'product_ids', 'segment', 'source', 'transaction', 'whatsapp']

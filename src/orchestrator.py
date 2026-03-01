@@ -9,6 +9,12 @@ sys.path.append(os.getcwd())
 
 from src.pipelines.hotmart_to_db import sync_sales_to_db
 from src.pipelines.manychat_csv_importer import process_manychat_input_dir
+from src.logic.audiences import (
+    refresh_audiences,
+    export_audiences_to_csv,
+    generate_audience_report,
+)
+from src.db.database import get_connection
 from src.config import Config
 
 
@@ -30,6 +36,13 @@ def run_daily_job():
         # Note: process_manychat_input_dir handles reading from data/input/manychat and cleanup
         print("\n--- Step 2: ManyChat Import ---")
         process_manychat_input_dir()
+
+        # 3. Gold Audience Refresh
+        print("\n--- Step 3: Refreshing Gold Audiences ---")
+        with get_connection() as conn:
+            refresh_audiences(conn)
+            generate_audience_report(conn)
+            export_audiences_to_csv(conn)
 
         print(f"\n[{datetime.now().isoformat()}] Daily job completed successfully.")
     except Exception as e:

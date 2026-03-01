@@ -1,7 +1,57 @@
 import sqlite3
+from datetime import datetime
 from typing import Optional
 from src.config import Config
 from src.models.schemas import Customer, Product, Sale
+
+# SQL Templates Gold Layer
+SQL_CREATE_AUDIENCE_ILPI = """
+    CREATE TABLE IF NOT EXISTS audience_ilpi (
+        name TEXT,
+        email TEXT PRIMARY KEY,
+        phone TEXT,
+        country TEXT,
+        state TEXT,
+        value REAL,
+        updated_at TIMESTAMP
+    )
+"""
+
+SQL_CREATE_AUDIENCE_ESTETICA = """
+    CREATE TABLE IF NOT EXISTS audience_estetica (
+        name TEXT,
+        email TEXT PRIMARY KEY,
+        phone TEXT,
+        country TEXT,
+        state TEXT,
+        value REAL,
+        updated_at TIMESTAMP
+    )
+"""
+
+SQL_UPSERT_AUDIENCE = """
+    INSERT INTO {} (name, email, phone, country, state, value, updated_at)
+    VALUES (:name, :email, :phone, :country, :state, :value, :updated_at)
+    ON CONFLICT(email) DO UPDATE SET
+        name = excluded.name,
+        phone = excluded.phone,
+        country = excluded.country,
+        state = excluded.state,
+        value = excluded.value,
+        updated_at = excluded.updated_at
+"""
+
+SQL_UPSERT_SALE = """
+    INSERT INTO sales (
+        transaction_id, status, total_price, currency, payment_method,
+        payment_type, installments, approved_date, order_date,
+        purchased_at, updated_at, customer_id, product_id, imported_at
+    ) VALUES (
+        :transaction, :status, :total_price, :currency, :payment_method,
+        :payment_type, :installments, :approved_date, :order_date,
+        :purchased_at, :updated_at, :customer_id, :product_id, :imported_at
+    )
+"""
 
 
 def get_connection(db_path: str = Config.DB_NAME) -> sqlite3.Connection:
@@ -158,6 +208,10 @@ def init_db(conn: sqlite3.Connection):
         )
     """)
 
+    # Gold Layer: Audiences
+    cur.execute(SQL_CREATE_AUDIENCE_ILPI)
+    cur.execute(SQL_CREATE_AUDIENCE_ESTETICA)
+
     conn.commit()
 
 
@@ -204,34 +258,42 @@ def upsert_product(conn: sqlite3.Connection, product: Product):
     )
 
 
-def upsert_sale(
-    conn: sqlite3.Connection, sale: Sale, imported_at: Optional[str] = None
-):
-    """Inserts a sale record as a Raw log (Append)."""
-    conn.execute(
-        """
-        INSERT INTO sales (
-            transaction_id, status, total_price, currency, payment_method,
-            payment_type, installments, approved_date, order_date,
-            customer_id, product_id, imported_at
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP))
-    """,
-        (
-            sale.transaction,
-            sale.status,
-            sale.total_price,
-            sale.currency,
-            sale.payment_method,
-            sale.payment_type,
-            sale.installments,
-            sale.approved_date,
-            sale.order_date,
-            sale.customer_id,
-            sale.product_id,
-            imported_at,
-        ),
-    )
+def upsert_sale(conn: sqlite3.Connection, sale: Sale, imported_at: str = None):
+    """Upserts a sale record using its transaction ID. Merges with existing records."""
+    cur = conn.cursor()
+
+    if imported_at is None:
+        imported_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    # Prepare data dict for named parameters mapping transaction -> transaction_id
+    data = {
+        **sale.model_dump(),
+        "transaction": sale.transaction,
+        "imported_at": imported_at,
+    }
+
+    # SQLite named parameters don't handle datetime well in :memory: tests sometimes
+    # if not properly converted, but schemas.py uses datetime objects.
+    # Pydantic's model_dump() with mode='json' or manual string conversion handles it.
+    for k, v in data.items():
+        if isinstance(v, datetime):
+            data[k] = v.isoformat()
+
+    cur.execute(SQL_UPSERT_SALE, data)
+    conn.commit()
+
+
+def upsert_audience_member(conn: sqlite3.Connection, table_name: str, data: dict):
+    """
+    Upserts a member into a specific audience table (Gold layer).
+    """
+    cur = conn.cursor()
+    # Sanitize table name (should only be internal constants)
+    if table_name not in ("audience_ilpi", "audience_estetica"):
+        raise ValueError(f"Invalid audience table name: {table_name}")
+
+    cur.execute(SQL_UPSERT_AUDIENCE.format(table_name), data)
+    conn.commit()
 
 
 def get_max_sale_date(conn: sqlite3.Connection) -> Optional[str]:

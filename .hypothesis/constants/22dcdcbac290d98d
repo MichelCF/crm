@@ -1,0 +1,4 @@
+# file: /home/caiafa/projetos/michel/crm/src/logic/audiences.py
+# hypothesis_version: 6.151.9
+
+[0.0, '%Y-%m-%d', '=', 'BR', 'audience_estetica', 'audience_ilpi', 'country', 'data/output', 'email', 'estetica_value', 'ilpi_value', 'name', 'phone', 'product_id', 'state', 'total_price', 'updated_at', 'utf-8', 'value', 'w']
