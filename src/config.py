@@ -25,6 +25,22 @@ class Config:
     OUTPUT_REMARKETING = "data/output/remarketing"
 
     @classmethod
+    def get_schedule_time(cls) -> str:
+        """Returns the time to run the daily job (HH:MM:SS format)."""
+        env_time = os.getenv("SCHEDULE_TIME")
+        if env_time:
+            return env_time
+
+        if cls.is_prd():
+            return "00:00:00"
+
+        # For non-prd (dev/hml), default to now + 10 seconds for fast testing
+        from datetime import datetime, timedelta
+
+        target_time = datetime.now() + timedelta(seconds=10)
+        return target_time.strftime("%H:%M:%S")
+
+    @classmethod
     def is_prd(cls) -> bool:
         return cls.ENVIRONMENT == "prd"
 

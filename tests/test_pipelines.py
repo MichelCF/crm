@@ -11,12 +11,21 @@ from src.pipelines.hotmart_to_db import (
 from src.config import Config
 
 
+@patch("src.pipelines.hotmart_to_db.get_sale_price_details")
+@patch("src.pipelines.hotmart_to_db.get_sale_users")
+@patch("src.pipelines.hotmart_to_db.HotmartClient")
 @patch("src.pipelines.hotmart_to_db.get_sales_history")
 @patch("src.pipelines.hotmart_to_db.upsert_customer")
 @patch("src.pipelines.hotmart_to_db.upsert_product")
 @patch("src.pipelines.hotmart_to_db.upsert_sale")
 def test_fetch_and_save_sales_pagination(
-    mock_upsert_sale, mock_upsert_product, mock_upsert_customer, mock_get_sales
+    mock_upsert_sale,
+    mock_upsert_product,
+    mock_upsert_customer,
+    mock_get_sales,
+    mock_client,
+    mock_get_users,
+    mock_get_price,
 ):
     """
     Happy Path / Boundary Test: Verifies that the pagination loop works correctly.
@@ -46,16 +55,25 @@ def test_fetch_and_save_sales_pagination(
     }
 
     mock_get_sales.side_effect = [page_1, page_2]
+    mock_get_users.return_value = {}
+    mock_get_price.return_value = {}
     mock_conn = MagicMock()
 
     # Act
-    fetch_and_save_sales(mock_conn, start_date_ms="1000", end_date_ms="2000")
+    fetch_and_save_sales(
+        mock_conn, start_date_ms="1000", end_date_ms="2000", client=mock_client
+    )
 
     # Assert API was called twice with correct pagination parameters
     assert mock_get_sales.call_count == 2
-    mock_get_sales.assert_any_call(start_date="1000", end_date="2000")
     mock_get_sales.assert_any_call(
-        start_date="1000", end_date="2000", page_token="token_abc123"
+        client=mock_client, start_date="1000", end_date="2000"
+    )
+    mock_get_sales.assert_any_call(
+        client=mock_client,
+        start_date="1000",
+        end_date="2000",
+        page_token="token_abc123",
     )
 
     # Assert that Both TX1 and TX2 items were successfully upserted to the DB
@@ -75,13 +93,16 @@ def test_date_str_to_ms():
     assert _date_str_to_ms(date_str) == expected_ms
 
 
+@patch("src.pipelines.hotmart_to_db.Config.is_dev")
+@patch("src.pipelines.hotmart_to_db.HotmartClient")
 @patch("src.pipelines.hotmart_to_db.fetch_and_save_sales")
-def test_do_initial_sync(mock_fetch):
+def test_do_initial_sync(mock_fetch, mock_client, mock_is_dev):
     """
     Decision Test: Verifies that initial sync slices a large date range into chunks.
     Scenario: 3 year span from .env.
     Assertion: Should result in 2 calls to fetch_and_save_sales (730 day max per chunk).
     """
+    mock_is_dev.return_value = False
     Config.HOTMART_START_DATE = "2020-01-01"
     Config.HOTMART_END_DATE = "2022-12-31"
 
@@ -96,8 +117,12 @@ def test_do_initial_sync(mock_fetch):
     expected_start_2 = _date_str_to_ms("2022-01-01")
     expected_end_2 = _date_str_to_ms("2022-12-31")
 
-    mock_fetch.assert_any_call(mock_conn, expected_start_1, expected_end_1)
-    mock_fetch.assert_any_call(mock_conn, expected_start_2, expected_end_2)
+    mock_fetch.assert_any_call(
+        mock_conn, expected_start_1, expected_end_1, client=mock_client()
+    )
+    mock_fetch.assert_any_call(
+        mock_conn, expected_start_2, expected_end_2, client=mock_client()
+    )
 
 
 @patch("src.pipelines.hotmart_to_db.fetch_and_save_sales")
@@ -115,12 +140,15 @@ def test_do_initial_sync_missing_dates(mock_fetch):
     mock_fetch.assert_not_called()
 
 
+@patch("src.pipelines.hotmart_to_db.Config.is_dev")
+@patch("src.pipelines.hotmart_to_db.HotmartClient")
 @patch("src.pipelines.hotmart_to_db.datetime")
 @patch("src.pipelines.hotmart_to_db.fetch_and_save_sales")
-def test_do_incremental_sync(mock_fetch, mock_datetime):
+def test_do_incremental_sync(mock_fetch, mock_datetime, mock_client, mock_is_dev):
     """
     Happy Path Test: Incremental sync fetches data from max current date to yesterday.
     """
+    mock_is_dev.return_value = False
     fixed_now = datetime(2024, 2, 10, 12, 0, 0)
     mock_datetime.now.return_value = fixed_now
     mock_datetime.fromisoformat = datetime.fromisoformat
@@ -136,7 +164,9 @@ def test_do_incremental_sync(mock_fetch, mock_datetime):
     expected_start = str(int(expected_max_date.timestamp() * 1000))
     expected_end = str(int(expected_yesterday.timestamp() * 1000))
 
-    mock_fetch.assert_called_once_with(mock_conn, expected_start, expected_end)
+    mock_fetch.assert_called_once_with(
+        mock_conn, expected_start, expected_end, client=mock_client()
+    )
 
 
 @patch("src.pipelines.hotmart_to_db.get_max_sale_date")

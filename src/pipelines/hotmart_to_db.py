@@ -1,5 +1,7 @@
 from datetime import datetime, timedelta
+from typing import Optional
 from src.hotmart.sales import get_sales_history, get_sale_users, get_sale_price_details
+from src.hotmart.client import HotmartClient
 from src.models.schemas import Customer, Product, Sale
 from src.db.database import (
     get_connection,
@@ -19,8 +21,15 @@ def _date_str_to_ms(date_str: str) -> str:
     return str(int(dt.timestamp() * 1000))
 
 
-def fetch_and_save_sales(conn, start_date_ms: str = None, end_date_ms: str = None):
+def fetch_and_save_sales(
+    conn,
+    start_date_ms: str = None,
+    end_date_ms: str = None,
+    client: Optional[HotmartClient] = None,
+):
     """Core function to fetch sales over a specific time period and save them to SQLite."""
+    if client is None:
+        client = HotmartClient()
     params = {}
     if start_date_ms:
         params["start_date"] = start_date_ms
@@ -36,7 +45,7 @@ def fetch_and_save_sales(conn, start_date_ms: str = None, end_date_ms: str = Non
         page_count += 1
         try:
             print(f"Fetching page {page_count}...")
-            response = get_sales_history(**params)
+            response = get_sales_history(client=client, **params)
         except Exception as e:
             print(f"Failed to fetch data from Hotmart. Error: {e}")
             break
@@ -114,7 +123,7 @@ def fetch_and_save_sales(conn, start_date_ms: str = None, end_date_ms: str = Non
                 # Enrichment with secondary APIs
                 user_detail = {}
                 try:
-                    users_meta = get_sale_users(txn_id)
+                    users_meta = get_sale_users(txn_id, client=client)
                     users_list = users_meta.get("users", [])
                     if users_list:
                         # Find the buyer
@@ -132,7 +141,7 @@ def fetch_and_save_sales(conn, start_date_ms: str = None, end_date_ms: str = Non
 
                 price_detail = {}
                 try:
-                    price_detail = get_sale_price_details(txn_id)
+                    price_detail = get_sale_price_details(txn_id, client=client)
                 except Exception as e:
                     print(f"Price enrichment failed for {txn_id}: {e}")
 
@@ -235,9 +244,16 @@ def do_initial_sync(conn):
             "HOTMART_START_DATE and HOTMART_END_DATE must be provided in .env for the initial sync."
         )
 
-    start_dt = datetime.strptime(Config.HOTMART_START_DATE, "%Y-%m-%d")
-    end_dt = datetime.strptime(Config.HOTMART_END_DATE, "%Y-%m-%d")
+    if Config.is_dev():
+        yesterday = datetime.now() - timedelta(days=1)
+        start_dt = yesterday.replace(hour=0, minute=0, second=0, microsecond=0)
+        end_dt = yesterday.replace(hour=23, minute=59, second=59, microsecond=999)
+        print(f"DEV MODE: Overriding dates to yesterday only: {start_dt} to {end_dt}")
+    else:
+        start_dt = datetime.strptime(Config.HOTMART_START_DATE, "%Y-%m-%d")
+        end_dt = datetime.strptime(Config.HOTMART_END_DATE, "%Y-%m-%d")
 
+    client = HotmartClient()
     chunks = get_date_chunks(start_dt, end_dt, max_days=730)
 
     for current_start, current_end in chunks:
@@ -247,21 +263,27 @@ def do_initial_sync(conn):
         start_ms = str(int(current_start.timestamp() * 1000))
         end_ms = str(int(current_end.timestamp() * 1000))
 
-        fetch_and_save_sales(conn, start_ms, end_ms)
+        fetch_and_save_sales(conn, start_ms, end_ms, client=client)
 
 
 def do_incremental_sync(conn, max_date_iso: str):
     """Scenario 2: The database has data. Sync from the last sale date up to yesterday."""
-    max_date = datetime.fromisoformat(max_date_iso)
     yesterday = datetime.now() - timedelta(days=1)
 
-    print(
-        f"Scenario: Incremental sync -> fetching from last sale {max_date} up to yesterday {yesterday}."
-    )
-    start_ms = str(int(max_date.timestamp() * 1000))
-    end_ms = str(int(yesterday.timestamp() * 1000))
+    if Config.is_dev():
+        max_date = yesterday.replace(hour=0, minute=0, second=0, microsecond=0)
+        end_date = yesterday.replace(hour=23, minute=59, second=59, microsecond=999)
+        print(f"DEV MODE: Syncing only yesterday: {max_date} to {end_date}")
+    else:
+        max_date = datetime.fromisoformat(max_date_iso)
+        end_date = yesterday
 
-    fetch_and_save_sales(conn, start_ms, end_ms)
+    print(f"Scenario: Incremental sync -> fetching from {max_date} up to {end_date}.")
+    start_ms = str(int(max_date.timestamp() * 1000))
+    end_ms = str(int(end_date.timestamp() * 1000))
+
+    client = HotmartClient()
+    fetch_and_save_sales(conn, start_ms, end_ms, client=client)
 
 
 def sync_sales_to_db():

@@ -1,0 +1,4 @@
+# file: /home/caiafa/projetos/michel/crm/src/hotmart/sales.py
+# hypothesis_version: 6.151.9
+
+['/sales/history', '/sales/price/details', '/sales/users', 'transaction']
