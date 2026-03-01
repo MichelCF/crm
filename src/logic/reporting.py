@@ -152,7 +152,7 @@ def generate_delta_report(conn: sqlite3.Connection):
 
     try:
         os.makedirs(os.path.dirname(report_path), exist_ok=True)
-        with open(report_path, "a", encoding="utf-8") as f:
+        with open(report_path, "w", encoding="utf-8") as f:
             f.write(full_report)
         print(f"Relatorio salvo em: {report_path}")
     except Exception as e:
