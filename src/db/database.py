@@ -20,8 +20,9 @@ def init_db(conn: sqlite3.Connection):
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS hotmart_customers (
-            id TEXT PRIMARY KEY,
-            email TEXT NOT NULL UNIQUE,
+            row_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id TEXT,
+            email TEXT NOT NULL,
             name TEXT NOT NULL,
             phone TEXT,
             document TEXT,
@@ -33,7 +34,8 @@ def init_db(conn: sqlite3.Connection):
             state TEXT,
             country TEXT,
             created_at TIMESTAMP NOT NULL,
-            updated_at TIMESTAMP
+            updated_at TIMESTAMP,
+            imported_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
 
@@ -101,7 +103,7 @@ def init_db(conn: sqlite3.Connection):
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS sales (
-            transaction_id TEXT PRIMARY KEY,
+            transaction_id TEXT,
             status TEXT NOT NULL,
             total_price REAL NOT NULL,
             currency TEXT NOT NULL,
@@ -113,9 +115,7 @@ def init_db(conn: sqlite3.Connection):
             purchased_at TIMESTAMP,
             updated_at TIMESTAMP,
             customer_id TEXT NOT NULL,
-            product_id TEXT NOT NULL,
-            FOREIGN KEY (customer_id) REFERENCES hotmart_customers (id),
-            FOREIGN KEY (product_id) REFERENCES products (id)
+            product_id TEXT NOT NULL
         )
     """)
 
@@ -161,7 +161,7 @@ def init_db(conn: sqlite3.Connection):
 
 
 def upsert_customer(conn: sqlite3.Connection, customer: Customer):
-    """Inserts or updates a customer record using id as PK."""
+    """Inserts a customer record as a Raw log (Append)."""
     conn.execute(
         """
         INSERT INTO hotmart_customers (
@@ -170,19 +170,6 @@ def upsert_customer(conn: sqlite3.Connection, customer: Customer):
             created_at, updated_at
         )
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET
-            email=excluded.email,
-            name=excluded.name,
-            phone=excluded.phone,
-            document=excluded.document,
-            zip_code=excluded.zip_code,
-            address=excluded.address,
-            number=excluded.number,
-            neighborhood=excluded.neighborhood,
-            city=excluded.city,
-            state=excluded.state,
-            country=excluded.country,
-            updated_at=excluded.updated_at
     """,
         (
             customer.id,
@@ -217,7 +204,7 @@ def upsert_product(conn: sqlite3.Connection, product: Product):
 
 
 def upsert_sale(conn: sqlite3.Connection, sale: Sale):
-    """Inserts or updates a sale record."""
+    """Inserts a sale record as a Raw log (Append)."""
     conn.execute(
         """
         INSERT INTO sales (
@@ -226,17 +213,6 @@ def upsert_sale(conn: sqlite3.Connection, sale: Sale):
             customer_id, product_id
         )
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(transaction_id) DO UPDATE SET
-            status=excluded.status,
-            total_price=excluded.total_price,
-            currency=excluded.currency,
-            payment_method=excluded.payment_method,
-            payment_type=excluded.payment_type,
-            installments=excluded.installments,
-            approved_date=excluded.approved_date,
-            order_date=excluded.order_date,
-            customer_id=excluded.customer_id,
-            product_id=excluded.product_id
     """,
         (
             sale.transaction,
@@ -398,20 +374,22 @@ def consolidate_all_to_master(conn: sqlite3.Connection):
     cur = conn.cursor()
 
     # 1. Processar Hotmart (Prioridade)
-    # Pegamos o perfil mais recente e agregamos status de compra e segmentos
-    # Nota: Usamos COALESCE e MAX para determinar se comprou algo aprovado
+    # Pegamos a versão mais RECENTE de cada cliente no Raw
     cur.execute("""
+        WITH LatestHotmart AS (
+            SELECT *, ROW_NUMBER() OVER (PARTITION BY id ORDER BY imported_at DESC) as rn
+            FROM hotmart_customers
+        )
         SELECT 
             c.id as hotmart_id,
             c.email,
             c.name,
             c.phone,
             c.document,
-            GROUP_CONCAT(DISTINCT s.product_id) as product_ids,
-            MAX(CASE WHEN s.status IN ('APPROVED', 'COMPLETE') THEN 1 ELSE 0 END) as bought
-        FROM hotmart_customers c
-        LEFT JOIN sales s ON c.id = s.customer_id
-        GROUP BY c.id
+            (SELECT GROUP_CONCAT(DISTINCT s.product_id) FROM sales s WHERE s.customer_id = c.id) as product_ids,
+            (SELECT MAX(CASE WHEN s.status IN ('APPROVED', 'COMPLETE') THEN 1 ELSE 0 END) FROM sales s WHERE s.customer_id = c.id) as bought
+        FROM LatestHotmart c
+        WHERE c.rn = 1
     """)
     hotmart_users = cur.fetchall()
 

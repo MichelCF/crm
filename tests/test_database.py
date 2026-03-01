@@ -9,6 +9,7 @@ from src.models.schemas import Customer, Product, Sale
 @pytest.fixture
 def mock_db():
     conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
     init_db(conn)
     yield conn
     conn.close()
@@ -107,28 +108,32 @@ def test_insert_sale_negative_case(mock_db):
         upsert_sale(mock_db, sale_invalid)
 
 
-def test_upsert_customer_boundary_update(mock_db):
+def test_upsert_customer_boundary_append_only(mock_db):
     """
-    Boundary Test: Verifies that upserting an existing customer correctly updates
-    their information instead of creating a duplicate.
+    MDM Strategy Test: Verifies that multiple inserts for the same ID
+    are kept in the Raw table (Append-only) to preserve history.
     """
     # 1. Initial Insert
     cust1 = Customer(id="B-1", email="a@b.com", name="A", created_at=datetime.now())
     upsert_customer(mock_db, cust1)
 
-    # 2. Update via Upsert (Same ID, different data)
+    # 2. Update (Same ID, different data)
     cust2 = Customer(
         id="B-1", email="new@b.com", name="New Name", created_at=datetime.now()
     )
     upsert_customer(mock_db, cust2)
 
     cur = mock_db.cursor()
-    cur.execute("SELECT email, name FROM hotmart_customers WHERE id = 'B-1'")
-    row = cur.fetchone()
+    # No Raw table, we should have 2 records for the same 'id'
+    cur.execute(
+        "SELECT email, name FROM hotmart_customers WHERE id = 'B-1' ORDER BY row_id DESC"
+    )
+    rows = cur.fetchall()
 
-    assert row[0] == "new@b.com"
-    assert row[1] == "New Name"
+    assert len(rows) == 2
+    assert rows[0]["email"] == "new@b.com"
+    assert rows[1]["email"] == "a@b.com"
 
-    # Ensure there is still only 1 customer
+    # Ensure count is 2
     cur.execute("SELECT count(*) FROM hotmart_customers")
-    assert cur.fetchone()[0] == 1
+    assert cur.fetchone()[0] == 2

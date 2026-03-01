@@ -1,0 +1,4 @@
+# file: /home/caiafa/projetos/michel/crm/src/config.py
+# hypothesis_version: 6.151.9
+
+['ENVIRONMENT', 'HOTMART_END_DATE', 'HOTMART_START_DATE', 'MANYCHAT_CSV_OUTPUT', 'data/input/manychat', 'data/output/publico', 'dev', 'manychat_output.csv', 'prd']

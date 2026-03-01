@@ -1,5 +1,6 @@
 import csv
 import argparse
+import os
 from datetime import datetime, timedelta
 from src.db.database import get_connection, consolidate_all_to_master
 from src.config import Config
@@ -78,6 +79,10 @@ def import_manychat_csv(file_path: str):
             consolidate_all_to_master(conn)
             print("Consolidation finished.")
 
+        # Cleanup: Delete file after successful processing
+        os.remove(file_path)
+        print(f"File {file_path} deleted successfully.")
+
     except FileNotFoundError:
         print(f"Error: Could not find the file '{file_path}'")
     except Exception as e:
@@ -86,24 +91,34 @@ def import_manychat_csv(file_path: str):
         conn.close()
 
 
+def process_manychat_input_dir():
+    """Processes all CSV files in the ManyChat input directory."""
+    input_dir = Config.MANYCHAT_INPUT_DIR
+    if not os.path.exists(input_dir):
+        print(f"Input directory {input_dir} does not exist.")
+        return
+
+    files = [f for f in os.listdir(input_dir) if f.endswith(".csv")]
+    if not files:
+        print(f"No CSV files found in {input_dir}.")
+        return
+
+    for file_name in files:
+        full_path = os.path.join(input_dir, file_name)
+        print(f"Processing {file_name}...")
+        import_manychat_csv(full_path)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Import ManyChat CSV contacts to CRM.")
     parser.add_argument(
         "file_path",
         nargs="?",
-        help="Path to the ManyChat CSV file (optional if set in .env)",
+        help="Path to a specific ManyChat CSV file (optional)",
     )
     args = parser.parse_args()
 
-    # Use CLI argument if provided, otherwise fallback to the environment variable (defaulting to data/ folder)
-    target_file = args.file_path
-    if not target_file:
-        file_name = Config.MANYCHAT_CSV_OUTPUT
-        # Ensure it looks in the data folder if no path is specified
-        if not file_name.startswith("data/") and not file_name.startswith("/"):
-            target_file = f"data/{file_name}"
-        else:
-            target_file = file_name
-
-    print(f"Using ManyChat CSV file: {target_file}")
-    import_manychat_csv(target_file)
+    if args.file_path:
+        import_manychat_csv(args.file_path)
+    else:
+        process_manychat_input_dir()
