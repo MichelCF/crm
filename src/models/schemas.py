@@ -1,38 +1,46 @@
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
 
 
 class Customer(BaseModel):
-    id: str
-    email: EmailStr
-    name: str
-    phone: Optional[str] = None
-    document: Optional[str] = Field(
-        None, description="CPF, CNPJ or other identification document"
-    )
+    id: str  # Note: Actually Hotmart has buyer id, but we usually use email or fallback
+    name: str | None = None
+    email: str | None = None
+    phone: str | None = None
+    document: str | None = None
+    # Endereço rico vindo do /sales/users
+    zip_code: str | None = None
+    address: str | None = None
+    number: str | None = None
+    neighborhood: str | None = None
+    city: str | None = None
+    state: str | None = None
+    country: str | None = None
     created_at: datetime
     updated_at: Optional[datetime] = None
 
 
 class Product(BaseModel):
-    id: int
+    id: str
     name: str
 
 
 class Sale(BaseModel):
-    transaction_id: str
-    status: str
-    total_price: float
-    net_price: float
-    currency: str = "BRL"
-    payment_method: str
-    purchased_at: datetime
+    transaction: str
+    status: str | None = None
+    payment_method: str | None = None
+    payment_type: str | None = None  # Pix, Cartão de Crédito, etc
+    installments: int | None = None
+    approved_date: int | None = None
+    order_date: int | None = None
+    total_price: float | None = None
+    currency: str | None = None
     updated_at: Optional[datetime] = None
 
     # Foreign Keys (Logical representation)
     customer_id: str
-    product_id: int
+    product_id: str
 
 
 class HotmartSalesRequestParams(BaseModel):

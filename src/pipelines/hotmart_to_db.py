@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta
-from src.hotmart.sales import get_sales_history
+from src.hotmart.sales import get_sales_history, get_sale_users, get_sale_price_details
 from src.models.schemas import Customer, Product, Sale
 from src.db.database import (
     get_connection,
@@ -77,11 +77,6 @@ def fetch_and_save_sales(conn, start_date_ms: str = None, end_date_ms: str = Non
                     purchase_data, "price", 0.0
                 )
 
-                # In some endpoints, commission/net is provided separately
-                net_price = (
-                    item.get("commission", {}).get("value") or total_price
-                )  # fallback if not available
-
                 buyer_data = item.get("buyer", {})
                 prod_data = item.get("product", {})
 
@@ -112,35 +107,87 @@ def fetch_and_save_sales(conn, start_date_ms: str = None, end_date_ms: str = Non
                 buyer_id = str(
                     buyer_data.get("ucode") or buyer_data.get("id") or txn_id
                 )
-                phone = buyer_data.get("phone") or purchase_data.get("phone")
+                phone_fallback = buyer_data.get("phone") or purchase_data.get("phone")
                 document = buyer_data.get("document") or purchase_data.get("document")
+
+                # Enrichment with secondary APIs
+                user_detail = {}
+                try:
+                    users_meta = get_sale_users(txn_id)
+                    users_list = users_meta.get("users", [])
+                    if users_list:
+                        # Find the buyer
+                        for user in users_list:
+                            if (
+                                user.get("role") == "BUYer"
+                                or user.get("role") == "BUYER"
+                            ):
+                                user_detail = user.get("user", {})
+                                break
+                        if not user_detail:
+                            user_detail = users_list[0].get("user", {})
+                except Exception as e:
+                    print(f"User enrichment failed for {txn_id}: {e}")
+
+                price_detail = {}
+                try:
+                    price_detail = get_sale_price_details(txn_id)
+                except Exception as e:
+                    print(f"Price enrichment failed for {txn_id}: {e}")
+
+                user_address = user_detail.get("address", {})
+                phone_rich = user_detail.get("phone") or phone_fallback
 
                 # 2. Validate with Pydantic
                 customer = Customer(
                     id=buyer_id,
-                    email=buyer_data.get("email", f"unknown_{txn_id}@noemail.com"),
-                    name=buyer_data.get("name", "Unknown Buyer"),
-                    phone=str(phone) if phone else None,
+                    email=buyer_data.get("email")
+                    or user_detail.get("email")
+                    or f"unknown_{txn_id}@noemail.com",
+                    name=buyer_data.get("name")
+                    or user_detail.get("name")
+                    or "Unknown Buyer",
+                    phone=str(phone_rich) if phone_rich else None,
                     document=str(document) if document else None,
+                    zip_code=user_address.get("zip_code"),
+                    address=user_address.get("address"),
+                    number=user_address.get("number"),
+                    neighborhood=user_address.get("neighborhood"),
+                    city=user_address.get("city"),
+                    state=user_address.get("state"),
+                    country=user_address.get("country"),
                     created_at=purchased_at,
                     updated_at=updated_at,
                 )
 
                 product = Product(
-                    id=prod_data.get("id", 0),
+                    id=str(prod_data.get("id", "0")),
                     name=prod_data.get("name", "Unknown Product"),
                 )
 
+                # Payment Details Extraction
+                payment_type = None
+                installments = None
+
+                payment_meta = price_detail.get("payment")
+                if payment_meta:
+                    payment_type = payment_meta.get("type") or payment_method
+                    installments = payment_meta.get("installments_number")
+
                 sale = Sale(
-                    transaction_id=txn_id,
+                    transaction=txn_id,
                     status=status.upper(),
                     total_price=float(total_price or 0.0),
-                    net_price=float(net_price or 0.0),
+                    currency=purchase_data.get("currency", "BRL"),
                     payment_method=payment_method,
+                    payment_type=payment_type,
+                    installments=installments,
+                    approved_date=int(updated_at_raw) if updated_at_raw else None,
+                    order_date=int(purchased_at_raw) if purchased_at_raw else None,
                     purchased_at=purchased_at,
                     updated_at=updated_at,
                     customer_id=customer.id,
-                    product_id=product.id,
+                    product_id=str(product.id),
                 )
 
                 # 3. Save to database

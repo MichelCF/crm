@@ -1,0 +1,4 @@
+# file: /home/caiafa/projetos/michel/crm/src/hotmart/auth.py
+# hypothesis_version: 6.151.9
+
+['Authorization', 'Content-Type', 'HOTMART_CLIENT_ID', 'access_token', 'application/json']

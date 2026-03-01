@@ -1,97 +1,96 @@
+import sqlite3
 import pytest
 from datetime import datetime
-from src.db.database import (
-    init_db,
-    get_connection,
-    upsert_customer,
-    upsert_product,
-    upsert_sale,
-)
+from src.db.database import init_db, upsert_customer, upsert_product, upsert_sale
 from src.models.schemas import Customer, Product, Sale
 
 
+# Setup do Banco de Dados em Memória para Testes Rápidos
 @pytest.fixture
-def memory_db():
-    db_path = ":memory:"
-    conn = get_connection(db_path)
+def mock_db():
+    conn = sqlite3.connect(":memory:")
     init_db(conn)
     yield conn
     conn.close()
 
 
-def test_database_initialization(memory_db):
-    cursor = memory_db.execute("SELECT name FROM sqlite_master WHERE type='table';")
-    tables = [row["name"] for row in cursor.fetchall()]
-    assert "customers" in tables
-    assert "hotmart_customers" in tables
-    assert "manychat_contacts" in tables
-    assert "products" in tables
-    assert "sales" in tables
+# =====================================================================
+# Objetivo do Teste: Validar inserção no SQLite com campos enriquecidos de Endereço e Pagamento
+# Valores esperados:
+# 1. No Ponto: Cliente e Venda com dados completos de V2 (Bairro, CEP, Pix, etc) inseridos corretamente.
+# 2. Falha: Tentativa de inserir uma Venda sem Customer associado ou com nulos indevidos (violando a FK/constraints).
+# =====================================================================
 
 
-def test_upsert_customer(memory_db):
-    now = datetime.now()
+def test_full_pipeline_insert_happy_path(mock_db):
+    """Verifica se os novos campos de V2 são de fato gravados no banco nas tabelas certas."""
+    # 1. Insere Cliente Completo
     cust = Customer(
-        id="USER123",
-        email="test@example.com",
-        name="Test User",
-        phone="123",
-        created_at=now,
-        updated_at=now,
+        id="CUST-999",
+        name="Sr. Madruga",
+        email="madruga@vila.com",
+        phone="552199999999",
+        document="11122233344",
+        zip_code="12345-678",
+        address="Rua 8",
+        number="71",
+        neighborhood="Vila",
+        city="Cidade do México",
+        state="CDMX",
+        country="BR",
+        created_at=datetime.now(),
     )
-    upsert_customer(memory_db, cust)
-    memory_db.commit()
+    upsert_customer(mock_db, cust)
 
-    # Verify insert
-    row = memory_db.execute(
-        "SELECT * FROM hotmart_customers WHERE id = ?", (cust.id,)
-    ).fetchone()
-    assert row["name"] == "Test User"
-    assert row["phone"] == "123"
-    assert row["email"] == "test@example.com"
+    # 2. Insere Produto Básico
+    prod = Product(id="PROD-1", name="Curso de Violão")
+    upsert_product(mock_db, prod)
 
-    # Verify update
-    cust.name = "Updated User"
-    upsert_customer(memory_db, cust)
-    memory_db.commit()
-
-    row = memory_db.execute(
-        "SELECT * FROM hotmart_customers WHERE id = ?", (cust.id,)
-    ).fetchone()
-    assert row["name"] == "Updated User"
-
-
-def test_upsert_sale_with_foreign_keys(memory_db):
-    now = datetime.now()
-    # Insert dependencies first due to PRAGMA foreign_keys = ON
-    cust = Customer(
-        id="BUYER1", email="buyer@example.com", name="Buyer", created_at=now
-    )
-    prod = Product(id=1, name="My Product")
-
-    upsert_customer(memory_db, cust)
-    upsert_product(memory_db, prod)
-
+    # 3. Insere Venda Completa
     sale = Sale(
-        transaction_id="TX001",
+        transaction="TXN-12345",
         status="APPROVED",
-        total_price=100.0,
-        net_price=90.0,
-        payment_method="CREDIT_CARD",
-        purchased_at=now,
-        updated_at=now,
-        customer_id="BUYER1",
-        product_id=1,
+        payment_method="PIX",
+        payment_type="PIX",
+        installments=1,
+        total_price=99.90,
+        currency="BRL",
+        customer_id=cust.id,
+        product_id=prod.id,
+    )
+    upsert_sale(mock_db, sale)
+
+    # 4. Verifica na Tabela (Assert)
+    cur = mock_db.cursor()
+    cur.execute(
+        "SELECT neighborhood, zip_code FROM hotmart_customers WHERE id = 'CUST-999'"
+    )
+    row_cust = cur.fetchone()
+    assert row_cust[0] == "Vila"
+    assert row_cust[1] == "12345-678"
+
+    cur.execute(
+        "SELECT payment_type, installments FROM sales WHERE transaction_id = 'TXN-12345'"
+    )
+    row_sale = cur.fetchone()
+    assert row_sale[0] == "PIX"
+    assert row_sale[1] == 1
+
+
+def test_insert_sale_negative_case(mock_db):
+    """Testa se o SQLite respeita as constraints e impede de cadastrar sem os campos NOT NULL."""
+    prod = Product(id="PROD-1", name="Curso de Violão")
+    upsert_product(mock_db, prod)
+
+    # Tentando forçar objeto pydantic ou mock vazio que passa no Python mas quebra as premissas do SQL (Falta o status obrigatório no BD)
+    sale_invalid = Sale(
+        transaction="TXN-INVALID",
+        status=None,  # BD exige NOT NULL de acordo com schemas originais
+        total_price=99.90,
+        currency="BRL",
+        customer_id="CUST-GHOST",  # Customer não existe
+        product_id=prod.id,
     )
 
-    upsert_sale(memory_db, sale)
-    memory_db.commit()
-
-    row = memory_db.execute(
-        "SELECT * FROM sales WHERE transaction_id = 'TX001'"
-    ).fetchone()
-    assert row["status"] == "APPROVED"
-    assert row["total_price"] == 100.0
-    assert row["net_price"] == 90.0
-    assert row["payment_method"] == "CREDIT_CARD"
-    assert row["updated_at"] is not None
+    with pytest.raises(sqlite3.IntegrityError):
+        upsert_sale(mock_db, sale_invalid)

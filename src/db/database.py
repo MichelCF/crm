@@ -25,6 +25,13 @@ def init_db(conn: sqlite3.Connection):
             name TEXT NOT NULL,
             phone TEXT,
             document TEXT,
+            zip_code TEXT,
+            address TEXT,
+            number TEXT,
+            neighborhood TEXT,
+            city TEXT,
+            state TEXT,
+            country TEXT,
             created_at TIMESTAMP NOT NULL,
             updated_at TIMESTAMP
         )
@@ -65,7 +72,7 @@ def init_db(conn: sqlite3.Connection):
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS products (
-            id INTEGER PRIMARY KEY,
+            id TEXT PRIMARY KEY,
             name TEXT NOT NULL
         )
     """)
@@ -75,13 +82,16 @@ def init_db(conn: sqlite3.Connection):
             transaction_id TEXT PRIMARY KEY,
             status TEXT NOT NULL,
             total_price REAL NOT NULL,
-            net_price REAL NOT NULL,
             currency TEXT NOT NULL,
-            payment_method TEXT NOT NULL,
-            purchased_at TIMESTAMP NOT NULL,
+            payment_method TEXT,
+            payment_type TEXT,
+            installments INTEGER,
+            approved_date INTEGER,
+            order_date INTEGER,
+            purchased_at TIMESTAMP,
             updated_at TIMESTAMP,
             customer_id TEXT NOT NULL,
-            product_id INTEGER NOT NULL,
+            product_id TEXT NOT NULL,
             FOREIGN KEY (customer_id) REFERENCES hotmart_customers (id),
             FOREIGN KEY (product_id) REFERENCES products (id)
         )
@@ -132,13 +142,24 @@ def upsert_customer(conn: sqlite3.Connection, customer: Customer):
     """Inserts or updates a customer record using id as PK."""
     conn.execute(
         """
-        INSERT INTO hotmart_customers (id, email, name, phone, document, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO hotmart_customers (
+            id, email, name, phone, document, 
+            zip_code, address, number, neighborhood, city, state, country, 
+            created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             email=excluded.email,
             name=excluded.name,
             phone=excluded.phone,
             document=excluded.document,
+            zip_code=excluded.zip_code,
+            address=excluded.address,
+            number=excluded.number,
+            neighborhood=excluded.neighborhood,
+            city=excluded.city,
+            state=excluded.state,
+            country=excluded.country,
             updated_at=excluded.updated_at
     """,
         (
@@ -147,6 +168,13 @@ def upsert_customer(conn: sqlite3.Connection, customer: Customer):
             customer.name,
             customer.phone,
             customer.document,
+            customer.zip_code,
+            customer.address,
+            customer.number,
+            customer.neighborhood,
+            customer.city,
+            customer.state,
+            customer.country,
             customer.created_at.isoformat(),
             customer.updated_at.isoformat() if customer.updated_at else None,
         ),
@@ -171,29 +199,33 @@ def upsert_sale(conn: sqlite3.Connection, sale: Sale):
     conn.execute(
         """
         INSERT INTO sales (
-            transaction_id, status, total_price, net_price, currency, payment_method, purchased_at, updated_at, customer_id, product_id
+            transaction_id, status, total_price, currency, payment_method,
+            payment_type, installments, approved_date, order_date,
+            customer_id, product_id
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(transaction_id) DO UPDATE SET
             status=excluded.status,
             total_price=excluded.total_price,
-            net_price=excluded.net_price,
             currency=excluded.currency,
             payment_method=excluded.payment_method,
-            purchased_at=excluded.purchased_at,
-            updated_at=excluded.updated_at,
+            payment_type=excluded.payment_type,
+            installments=excluded.installments,
+            approved_date=excluded.approved_date,
+            order_date=excluded.order_date,
             customer_id=excluded.customer_id,
             product_id=excluded.product_id
     """,
         (
-            sale.transaction_id,
+            sale.transaction,
             sale.status,
             sale.total_price,
-            sale.net_price,
             sale.currency,
             sale.payment_method,
-            sale.purchased_at.isoformat(),
-            sale.updated_at.isoformat() if sale.updated_at else None,
+            sale.payment_type,
+            sale.installments,
+            sale.approved_date,
+            sale.order_date,
             sale.customer_id,
             sale.product_id,
         ),
@@ -204,5 +236,5 @@ def get_max_sale_date(conn: sqlite3.Connection) -> Optional[str]:
     """Retrieves the latest purchased_at date from the sales table."""
     row = conn.execute("SELECT MAX(purchased_at) as max_date FROM sales").fetchone()
     if row and row["max_date"]:
-        return row["max_date"]  # returns isoformat string
+        return row["max_date"]
     return None
