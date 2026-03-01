@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Optional, Union
 from src.hotmart.sales import get_sales_history, get_sale_users, get_sale_price_details
 from src.hotmart.client import HotmartClient
 from src.models.schemas import Customer, Product, Sale
@@ -20,6 +20,143 @@ def _date_str_to_ms(date_str: str) -> str:
     """Converts a YYYY-MM-DD string to unix time in milliseconds as required by Hotmart."""
     dt = datetime.strptime(date_str, "%Y-%m-%d")
     return str(int(dt.timestamp() * 1000))
+
+
+def _parse_hotmart_date(date_raw: Optional[Union[int, str]]) -> datetime:
+    """
+    Boundary Testable: Safely converts Hotmart millisecond timestamps to datetime.
+    """
+    if not date_raw:
+        return datetime.now()
+    try:
+        # Hotmart dates are in milliseconds
+        return datetime.fromtimestamp(int(date_raw) / 1000.0)
+    except (ValueError, TypeError, OSError):
+        return datetime.now()
+
+
+def _resolve_buyer_id(buyer_data: dict, txn_id: str) -> str:
+    """
+    MC/DC Testable: Resolves the best available unique ID for a buyer.
+    Conditions: ucode, id, txn_id.
+    """
+    ucode = buyer_data.get("ucode")
+    external_id = buyer_data.get("id")
+
+    if ucode:
+        return str(ucode)
+    if external_id:
+        return str(external_id)
+    return str(txn_id)
+
+
+def _extract_sale_models(
+    item: dict, client: HotmartClient
+) -> tuple[Customer, Product, Sale]:
+    """
+    Orchestrates the mapping from Hotmart JSON to Pydantic models.
+    """
+    purchase_data = item.get("purchase", {})
+    buyer_data = item.get("buyer", {})
+    prod_data = item.get("product", {})
+
+    txn_id = purchase_data.get("transaction") or item.get("transaction") or "UNKNOWN"
+    status = purchase_data.get("status") or item.get("status") or "UNKNOWN"
+
+    # Dates
+    purchased_at = _parse_hotmart_date(purchase_data.get("order_date"))
+    updated_at_raw = purchase_data.get("approved_date")
+    updated_at = None
+    if updated_at_raw:
+        updated_at = _parse_hotmart_date(updated_at_raw)
+
+    # IDs and Contact
+    buyer_id = _resolve_buyer_id(buyer_data, txn_id)
+    phone_fallback = buyer_data.get("phone") or purchase_data.get("phone")
+    document = buyer_data.get("document") or purchase_data.get("document")
+
+    # Enrichment with secondary APIs
+    user_detail = {}
+    try:
+        users_meta = get_sale_users(txn_id, client=client)
+        users_list = users_meta.get("users", [])
+        for user in users_list:
+            if user.get("role") in ("BUYer", "BUYER"):
+                user_detail = user.get("user", {})
+                break
+        if not user_detail and users_list:
+            user_detail = users_list[0].get("user", {})
+    except Exception as e:
+        print(f"User enrichment failed for {txn_id}: {e}")
+
+    price_detail = {}
+    try:
+        price_detail = get_sale_price_details(txn_id, client=client)
+    except Exception as e:
+        print(f"Price enrichment failed for {txn_id}: {e}")
+
+    user_address = user_detail.get("address", {})
+    phone_rich = user_detail.get("phone") or phone_fallback
+
+    # Model Mapping
+    customer = Customer(
+        id=buyer_id,
+        email=buyer_data.get("email")
+        or user_detail.get("email")
+        or f"unknown_{txn_id}@noemail.com",
+        name=buyer_data.get("name") or user_detail.get("name") or "Unknown Buyer",
+        phone=str(phone_rich) if phone_rich else None,
+        document=str(document) if document else None,
+        zip_code=user_address.get("zip_code"),
+        address=user_address.get("address"),
+        number=user_address.get("number"),
+        neighborhood=user_address.get("neighborhood"),
+        city=user_address.get("city"),
+        state=user_address.get("state"),
+        country=user_address.get("country"),
+        created_at=purchased_at,
+        updated_at=updated_at,
+    )
+
+    product = Product(
+        id=str(prod_data.get("id", "0")),
+        name=prod_data.get("name", "Unknown Product"),
+    )
+
+    # Payment
+    payment_method = purchase_data.get("payment", {}).get("type") or "UNKNOWN"
+    payment_type = None
+    installments = None
+    payment_meta = price_detail.get("payment")
+    if payment_meta:
+        payment_type = payment_meta.get("type") or payment_method
+        installments = payment_meta.get("installments_number")
+
+    total_price = purchase_data.get("price", {}).get("value") or getattr(
+        purchase_data, "price", 0.0
+    )
+
+    sale = Sale(
+        transaction=txn_id,
+        status=status.upper(),
+        total_price=float(total_price or 0.0),
+        currency=purchase_data.get("currency", "BRL"),
+        payment_method=payment_method,
+        payment_type=payment_type,
+        installments=installments,
+        approved_date=int(updated_at_raw) if updated_at_raw else None,
+        order_date=(
+            int(purchase_data.get("order_date"))
+            if purchase_data.get("order_date")
+            else None
+        ),
+        purchased_at=purchased_at,
+        updated_at=updated_at,
+        customer_id=customer.id,
+        product_id=product.id,
+    )
+
+    return customer, product, sale
 
 
 def fetch_and_save_sales(
@@ -70,140 +207,11 @@ def fetch_and_save_sales(
 
         # Process the page's items
         for item in items:
+            txn_id = "UNKNOWN"
             try:
-                # 1. Parse nested data
-                txn_id = item.get("purchase", {}).get("transaction") or item.get(
-                    "transaction"
-                )
-                status = item.get("purchase", {}).get("status") or item.get(
-                    "status", "UNKNOWN"
-                )
-
-                # We want ALL statuses (STARTED, CANCELED, WAITING_PAYMENT, etc) for remarketing
-
-                payment_method = (
-                    item.get("purchase", {}).get("payment", {}).get("type") or "UNKNOWN"
-                )
-
-                # Hotmart provides original price and hotmart_fee (so net is often original - fee)
-                # Or the user's specific commission. As a fallback we search common Hotmart keys
-                purchase_data = item.get("purchase", {})
-                total_price = purchase_data.get("price", {}).get("value") or getattr(
-                    purchase_data, "price", 0.0
-                )
-
-                buyer_data = item.get("buyer", {})
-                prod_data = item.get("product", {})
-
-                # Map purchased_at to datetime
-                purchased_at_raw = purchase_data.get("order_date")
-                if purchased_at_raw:
-                    # Hotmart date format: milliseconds or unix string
-                    try:
-                        purchased_at = datetime.fromtimestamp(
-                            int(purchased_at_raw) / 1000.0
-                        )
-                    except ValueError:
-                        purchased_at = datetime.now()  # Fallback
-                else:
-                    purchased_at = datetime.now()
-
-                updated_at_raw = purchase_data.get("approved_date")
-                updated_at = None
-                if updated_at_raw:
-                    try:
-                        updated_at = datetime.fromtimestamp(
-                            int(updated_at_raw) / 1000.0
-                        )
-                    except ValueError:
-                        pass
-
-                # Try to grab internal IDs and document/phone arrays
-                buyer_id = str(
-                    buyer_data.get("ucode") or buyer_data.get("id") or txn_id
-                )
-                phone_fallback = buyer_data.get("phone") or purchase_data.get("phone")
-                document = buyer_data.get("document") or purchase_data.get("document")
-
-                # Enrichment with secondary APIs
-                user_detail = {}
-                try:
-                    users_meta = get_sale_users(txn_id, client=client)
-                    users_list = users_meta.get("users", [])
-                    if users_list:
-                        # Find the buyer
-                        for user in users_list:
-                            if (
-                                user.get("role") == "BUYer"
-                                or user.get("role") == "BUYER"
-                            ):
-                                user_detail = user.get("user", {})
-                                break
-                        if not user_detail:
-                            user_detail = users_list[0].get("user", {})
-                except Exception as e:
-                    print(f"User enrichment failed for {txn_id}: {e}")
-
-                price_detail = {}
-                try:
-                    price_detail = get_sale_price_details(txn_id, client=client)
-                except Exception as e:
-                    print(f"Price enrichment failed for {txn_id}: {e}")
-
-                user_address = user_detail.get("address", {})
-                phone_rich = user_detail.get("phone") or phone_fallback
-
-                # 2. Validate with Pydantic
-                customer = Customer(
-                    id=buyer_id,
-                    email=buyer_data.get("email")
-                    or user_detail.get("email")
-                    or f"unknown_{txn_id}@noemail.com",
-                    name=buyer_data.get("name")
-                    or user_detail.get("name")
-                    or "Unknown Buyer",
-                    phone=str(phone_rich) if phone_rich else None,
-                    document=str(document) if document else None,
-                    zip_code=user_address.get("zip_code"),
-                    address=user_address.get("address"),
-                    number=user_address.get("number"),
-                    neighborhood=user_address.get("neighborhood"),
-                    city=user_address.get("city"),
-                    state=user_address.get("state"),
-                    country=user_address.get("country"),
-                    created_at=purchased_at,
-                    updated_at=updated_at,
-                )
-
-                product = Product(
-                    id=str(prod_data.get("id", "0")),
-                    name=prod_data.get("name", "Unknown Product"),
-                )
-
-                # Payment Details Extraction
-                payment_type = None
-                installments = None
-
-                payment_meta = price_detail.get("payment")
-                if payment_meta:
-                    payment_type = payment_meta.get("type") or payment_method
-                    installments = payment_meta.get("installments_number")
-
-                sale = Sale(
-                    transaction=txn_id,
-                    status=status.upper(),
-                    total_price=float(total_price or 0.0),
-                    currency=purchase_data.get("currency", "BRL"),
-                    payment_method=payment_method,
-                    payment_type=payment_type,
-                    installments=installments,
-                    approved_date=int(updated_at_raw) if updated_at_raw else None,
-                    order_date=int(purchased_at_raw) if purchased_at_raw else None,
-                    purchased_at=purchased_at,
-                    updated_at=updated_at,
-                    customer_id=customer.id,
-                    product_id=str(product.id),
-                )
+                # Use extracted mapping function
+                customer, product, sale = _extract_sale_models(item, client)
+                txn_id = sale.transaction
 
                 # 3. Save to database
                 upsert_customer(conn, customer)
