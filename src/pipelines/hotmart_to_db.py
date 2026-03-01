@@ -136,9 +136,12 @@ def _extract_sale_models(
         purchase_data, "price", 0.0
     )
 
+    # Status resilience (Hypothesis found dictionary case)
+    status_str = str(status) if not isinstance(status, str) else status
+
     sale = Sale(
         transaction=txn_id,
-        status=status.upper(),
+        status=status_str.upper(),
         total_price=float(total_price or 0.0),
         currency=purchase_data.get("currency", "BRL"),
         payment_method=payment_method,

@@ -1,0 +1,4 @@
+# file: /home/caiafa/projetos/michel/crm/src/logic/remarketing.py
+# hypothesis_version: 6.151.9
+
+['%Y-%m-%d', '%Y-%m-%d 00:00:00', '=', 'customer_id', 'data', 'email', 'last_purchase_at', 'last_remarketing_at', 'limit', 'output', 'phone', 'remarketing', 'utf-8', 'w']

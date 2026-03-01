@@ -29,6 +29,19 @@ SQL_CREATE_AUDIENCE_ESTETICA = """
     )
 """
 
+SQL_CREATE_REMARKETING_HISTORY = """
+    CREATE TABLE IF NOT EXISTS remarketing_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        customer_id INTEGER,
+        email TEXT,
+        phone TEXT,
+        last_remarketing_at TIMESTAMP,
+        last_purchase_at TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (customer_id) REFERENCES customers(id)
+    )
+"""
+
 SQL_UPSERT_AUDIENCE = """
     INSERT INTO {} (name, email, phone, country, state, value, updated_at)
     VALUES (:name, :email, :phone, :country, :state, :value, :updated_at)
@@ -120,6 +133,8 @@ def init_db(conn: sqlite3.Connection):
             source TEXT DEFAULT 'HOTMART',
             has_purchased BOOLEAN DEFAULT 0,
             segment TEXT,
+            last_remarketing_at TIMESTAMP,
+            last_purchase_at TIMESTAMP,
             updated_at TIMESTAMP
         )
     """)
@@ -139,6 +154,14 @@ def init_db(conn: sqlite3.Connection):
         pass
     try:
         cur.execute("ALTER TABLE customers ADD COLUMN updated_at TIMESTAMP")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        cur.execute("ALTER TABLE customers ADD COLUMN last_remarketing_at TIMESTAMP")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        cur.execute("ALTER TABLE customers ADD COLUMN last_purchase_at TIMESTAMP")
     except sqlite3.OperationalError:
         pass
     try:
@@ -211,6 +234,7 @@ def init_db(conn: sqlite3.Connection):
     # Gold Layer: Audiences
     cur.execute(SQL_CREATE_AUDIENCE_ILPI)
     cur.execute(SQL_CREATE_AUDIENCE_ESTETICA)
+    cur.execute(SQL_CREATE_REMARKETING_HISTORY)
 
     conn.commit()
 
@@ -314,13 +338,14 @@ def upsert_master_customer(
     hotmart_id: Optional[str] = None,
     manychat_id: Optional[int] = None,
     has_purchased: bool = False,
-    segment: Optional[str] = None,
+    segment: str = None,
+    last_remarketing_at: str = None,
+    last_purchase_at: str = None,
 ):
     """
-    Consolidates data into the 'customers' table following business rules:
-    - Hotmart is the Source of Truth.
-    - ManyChat data only flows to Master if phone is present.
-    - If user exists as HOTMART, ManyChat only updates missing fields (like Instagram).
+    Inserts or updates a customer in the unified master table.
+    Ensures Hotmart remains Source of Truth if conflicting with ManyChat.
+    Includes last_remarketing_at and last_purchase_at for Card 11.
     """
     cur = conn.cursor()
     from datetime import datetime
@@ -360,6 +385,7 @@ def upsert_master_customer(
                     source = 'HOTMART',
                     has_purchased = ?,
                     segment = ?,
+                    last_purchase_at = COALESCE(?, last_purchase_at),
                     updated_at = ?
                 WHERE id = ?
             """,
@@ -370,6 +396,7 @@ def upsert_master_customer(
                     hotmart_id,
                     1 if has_purchased else existing["has_purchased"],
                     segment or existing["segment"],
+                    last_purchase_at,
                     now,
                     user_id,
                 ),
@@ -385,10 +412,20 @@ def upsert_master_customer(
                         name = COALESCE(name, ?),
                         instagram = COALESCE(instagram, ?),
                         manychat_id = COALESCE(manychat_id, ?),
+                        last_remarketing_at = COALESCE(?, last_remarketing_at),
                         updated_at = ?
                     WHERE id = ?
                 """,
-                    (email, phone, name, instagram, manychat_id, now, user_id),
+                    (
+                        email,
+                        phone,
+                        name,
+                        instagram,
+                        manychat_id,
+                        last_remarketing_at,
+                        now,
+                        user_id,
+                    ),
                 )
             else:
                 # Fonte é HOTMART, só permitimos atualizar Instagram e ManyChat ID
@@ -411,8 +448,9 @@ def upsert_master_customer(
             """
             INSERT INTO customers (
                 master_email, master_phone, name, instagram, hotmart_id, 
-                manychat_id, source, has_purchased, segment, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                manychat_id, source, has_purchased, segment, 
+                last_remarketing_at, last_purchase_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
             (
                 email,
@@ -424,6 +462,8 @@ def upsert_master_customer(
                 source,
                 1 if has_purchased else 0,
                 segment,
+                last_remarketing_at,
+                last_purchase_at,
                 now,
             ),
         )
@@ -448,10 +488,16 @@ def consolidate_all_to_master(conn: sqlite3.Connection):
         )
         SELECT 
             c.id as hotmart_id,
-            c.email,
+            c.email as master_email,
+            c.phone as master_phone,
             c.name,
-            c.phone,
-            c.document,
+            (
+                SELECT s.purchased_at 
+                FROM sales s 
+                WHERE s.customer_id = c.id 
+                ORDER BY s.purchased_at DESC 
+                LIMIT 1
+            ) as last_purchase_at,
             (SELECT GROUP_CONCAT(DISTINCT s.product_id) FROM sales s WHERE s.customer_id = c.id) as product_ids,
             (SELECT MAX(CASE WHEN s.status IN ('APPROVED', 'COMPLETE') THEN 1 ELSE 0 END) FROM sales s WHERE s.customer_id = c.id) as bought
         FROM LatestHotmart c
@@ -466,18 +512,23 @@ def consolidate_all_to_master(conn: sqlite3.Connection):
         upsert_master_customer(
             conn,
             source="HOTMART",
-            email=row["email"],
-            phone=row["phone"],
+            email=row["master_email"],
+            phone=row["master_phone"],
             name=row["name"],
             hotmart_id=row["hotmart_id"],
             has_purchased=bool(row["bought"]),
             segment=segment,
+            last_purchase_at=row["last_purchase_at"],
         )
 
     # 2. Processar ManyChat (Suplemento)
-    cur.execute(
-        "SELECT * FROM manychat_contacts WHERE whatsapp IS NOT NULL AND whatsapp != ''"
-    )
+    cur.execute("""
+        SELECT 
+            email, whatsapp as phone, nome as name, instagram, 
+            id as manychat_id, data_remarketing as last_remarketing_at
+        FROM manychat_contacts
+        WHERE whatsapp IS NOT NULL AND whatsapp != ''
+    """)
     manychat_users = cur.fetchall()
 
     for row in manychat_users:
@@ -485,10 +536,11 @@ def consolidate_all_to_master(conn: sqlite3.Connection):
             conn,
             source="MANYCHAT",
             email=row["email"],
-            phone=row["whatsapp"],
-            name=row["nome"],
+            phone=row["phone"],
+            name=row["name"],
             instagram=row["instagram"],
-            manychat_id=row["id"],
+            manychat_id=row["manychat_id"],
+            last_remarketing_at=row["last_remarketing_at"],
         )
 
     conn.commit()

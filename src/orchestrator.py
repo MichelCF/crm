@@ -14,6 +14,10 @@ from src.logic.audiences import (
     export_audiences_to_csv,
     generate_audience_report,
 )
+from src.logic.remarketing import (
+    generate_remarketing_batch,
+    generate_remarketing_report,
+)
 from src.db.database import get_connection
 from src.config import Config
 
@@ -43,6 +47,12 @@ def run_daily_job():
             refresh_audiences(conn)
             generate_audience_report(conn)
             export_audiences_to_csv(conn)
+
+        # 4. Remarketing Generation (Gold)
+        print("\n--- Step 4: Generating Remarketing Batch ---")
+        with get_connection() as conn:
+            generate_remarketing_batch(conn, limit=50)
+            generate_remarketing_report(conn)
 
         print(f"\n[{datetime.now().isoformat()}] Daily job completed successfully.")
     except Exception as e:
